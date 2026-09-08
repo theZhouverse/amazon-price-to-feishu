@@ -65,6 +65,9 @@ class SchedulerPolicyTests(unittest.TestCase):
         self.assertIn('$exitCode -eq 75', script)
         self.assertIn('$exitCode = 0', script)
         self.assertIn('$PID.log', script)
+        self.assertIn('$runnerError = $null', script)
+        self.assertIn('finally {', script)
+        self.assertIn('END exit=$exitCode', script)
 
     def test_scheduler_uses_gui_launcher_before_powershell(self):
         root = Path(__file__).resolve().parents[1]

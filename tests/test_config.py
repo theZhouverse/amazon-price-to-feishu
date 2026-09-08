@@ -77,6 +77,42 @@ class TestConfigSources(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'App ID'):
                     config_mod.load_config(path)
 
+    def test_explicit_runtime_overrides_are_supported_for_portable_deployments(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path = self._write_config(root)
+            env = {
+                'AMAZON_HTML_ARCHIVE_ROOT': '/data/htmls',
+                'AMAZON_HTML_ARCHIVE_ENABLED': 'true',
+                'AMAZON_HTML_SERVER_PORT': '9876',
+                'AMAZON_WORKERS': '2',
+            }
+            with patch.object(config_mod, 'PROJECT_ROOT', root), \
+                    patch.dict(os.environ, env, clear=True):
+                cfg = config_mod.load_config(path)
+            self.assertEqual(cfg['html_archive_root'], '/data/htmls')
+            self.assertTrue(cfg['html_archive_enabled'])
+            self.assertEqual(cfg['html_server_port'], 9876)
+            self.assertEqual(cfg['workers'], 2)
+
+    def test_invalid_runtime_boolean_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path = self._write_config(root)
+            with patch.object(config_mod, 'PROJECT_ROOT', root), \
+                    patch.dict(os.environ, {'AMAZON_HTML_ARCHIVE_ENABLED': 'maybe'}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, '必须是布尔值'):
+                    config_mod.load_config(path)
+
+    def test_invalid_runtime_port_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path = self._write_config(root)
+            with patch.object(config_mod, 'PROJECT_ROOT', root), \
+                    patch.dict(os.environ, {'AMAZON_HTML_SERVER_PORT': '70000'}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, 'html_server_port'):
+                    config_mod.load_config(path)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,8 @@
 import unittest
 from unittest.mock import Mock
 
+import httpx
+
 from feishu import FeishuClient
 
 
@@ -35,6 +37,36 @@ class TestSnapshotCopy(unittest.TestCase):
         client._client.post.return_value = response
         with self.assertRaisesRegex(RuntimeError, '缺少副本 Token'):
             client.copy_file('source-token', 'sheet', 'TEST')
+
+    def test_copy_file_recovers_copy_created_before_504(self):
+        client = self.make_client()
+        timeout_response = Mock(status_code=504)
+        timeout_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            'gateway timeout', request=Mock(), response=timeout_response)
+        listing = Mock(status_code=200)
+        listing.json.return_value = {
+            'code': 0,
+            'data': {'files': [{'name': 'TEST', 'type': 'sheet', 'token': 'recovered-token'}]},
+        }
+        client._client.post.return_value = timeout_response
+        client._client.get.return_value = listing
+        got = client.copy_file('source-token', 'sheet', 'TEST')
+        self.assertEqual(got['token'], 'recovered-token')
+        client._client.post.assert_called_once()
+        client._client.get.assert_called_once()
+
+    def test_copy_file_retries_transport_timeout_then_succeeds(self):
+        client = self.make_client()
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            'code': 0,
+            'data': {'file': {'token': 'copy-token', 'name': 'TEST', 'type': 'sheet'}},
+        }
+        client._client.post.side_effect = [httpx.ReadTimeout('timeout'), success]
+        with unittest.mock.patch('feishu.time.sleep'):
+            got = client.copy_file('source-token', 'sheet', 'TEST')
+        self.assertEqual(got['token'], 'copy-token')
+        self.assertEqual(client._client.post.call_count, 2)
 
     def test_structure_hash_is_stable(self):
         client = self.make_client()

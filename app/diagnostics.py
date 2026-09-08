@@ -12,7 +12,7 @@ from models import CrawlResult
 
 def save_evidence(run_id: str, sheet: str, cr: CrawlResult, tab, cfg: dict) -> Path | None:
     """保存截图和诊断JSON；既有page.html保留但不再新增。"""
-    if cr.status.value not in ('crawl_error', 'parse_error'):
+    if cr.status.value not in ('crawl_error', 'identity_mismatch', 'parse_error'):
         return None
     d = DEBUG_DIR / run_id / sheet / cr.asin
     d.mkdir(parents=True, exist_ok=True)

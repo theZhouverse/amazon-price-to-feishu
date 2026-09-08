@@ -87,6 +87,12 @@ class PriceEvidenceTests(unittest.TestCase):
         self.assertFalse(self.b.setup())
         self.assertEqual(self.fetch(self.price()).status, PageStatus.CRAWL_ERROR)
 
+    def test_postal_setup_retries_transient_address_component(self):
+        self.b.page = Mock()
+        self.b._set_postal_code = Mock(side_effect=[False, True])
+        self.assertTrue(self.b.setup())
+        self.assertEqual(self.b._set_postal_code.call_count, 2)
+
     def test_conflict_is_parse_error_not_sold_out(self):
         html = self.price('$10') + '<div id="buybox"><span class="a-offscreen">$20</span></div>'
         self.assertEqual(self.fetch(html).status, PageStatus.PARSE_ERROR)
@@ -118,6 +124,23 @@ class PriceEvidenceTests(unittest.TestCase):
             self.fetch(self.price())
         self.assertEqual(self.tab.get.call_args.kwargs['timeout'], 2)
         self.assertEqual(self.tab.get.call_args.kwargs['retry'], 0)
+
+    def test_failed_navigation_does_not_read_stale_tab(self):
+        self.tab = Mock()
+        self.tab.get.return_value = False
+        cr = self.b.fetch_once(self.tab, self.row, self.cfg)
+        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertIn('navigation_failed', cr.error)
+        self.tab.run_js.assert_not_called()
+
+    def test_doc_loaded_timeout_does_not_read_stale_tab(self):
+        self.tab = Mock()
+        self.tab.get.return_value = True
+        self.tab.wait.doc_loaded.side_effect = TimeoutError('not ready')
+        cr = self.b.fetch_once(self.tab, self.row, self.cfg)
+        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertIn('navigation_timeout', cr.error)
+        self.tab.run_js.assert_not_called()
 
 class RecoveryTests(unittest.TestCase):
     def test_manual_menu_uses_weekly_entry_and_readonly_minimal_sample(self):

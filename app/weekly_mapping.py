@@ -28,7 +28,12 @@ def find_asin_header(values: list[list]) -> tuple[int, int] | None:
     """返回 (1-based 表头行, 1-based ASIN 列)。"""
     for row_index, row in enumerate(values[:10], start=1):
         for col_index, cell in enumerate(row, start=1):
-            if cell_text(cell).upper() == 'ASIN':
+            # 周报有时在 ASIN 表头后附加说明，例如
+            # ``ASIN\n(颜色...)``。这仍是 ASIN 列，不能因为注释文本而
+            # 把整个已知 PD/CPD 子表误判成未知 Marketplace；但不接受
+            # ``ASIN_CODE`` 等普通字符串，避免误识别辅助列。
+            header = cell_text(cell)
+            if re.match(r'^ASIN(?:$|[\s(（])', header, re.IGNORECASE):
                 return row_index, col_index
     return None
 

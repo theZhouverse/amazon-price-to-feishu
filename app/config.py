@@ -114,6 +114,7 @@ _NUM_FIELDS = {
     'log_keep': (int, 1, 365),
     'html_retention_days': (int, 1, 30),
     'html_min_free_gb': (float, 0, 10000),
+    'html_server_port': (int, 1, 65535),
 }
 
 
@@ -135,6 +136,36 @@ def load_config(config_path: Path | None = None) -> dict:
                 '或系统环境变量 FS_APP_SECRET'
             )
         cfg.update({k: v for k, v in user.items() if v is not None})
+
+    # Container/portable deployments may keep one checked-in config file while
+    # changing only machine-local paths and feature switches at runtime.  Keep
+    # this deliberately small and explicit: arbitrary environment-to-config
+    # mapping would make production behavior difficult to audit.
+    env_overrides = {
+        'html_archive_root': 'AMAZON_HTML_ARCHIVE_ROOT',
+        'html_server_bind': 'AMAZON_HTML_SERVER_BIND',
+        'html_server_port': 'AMAZON_HTML_SERVER_PORT',
+        'html_archive_enabled': 'AMAZON_HTML_ARCHIVE_ENABLED',
+        'html_archive_required': 'AMAZON_HTML_ARCHIVE_REQUIRED',
+        'html_server_enabled': 'AMAZON_HTML_SERVER_ENABLED',
+        'workers': 'AMAZON_WORKERS',
+    }
+    for key, env_name in env_overrides.items():
+        raw = os.environ.get(env_name)
+        if raw is None or not raw.strip():
+            continue
+        if key in {'html_archive_enabled', 'html_archive_required', 'html_server_enabled'}:
+            lowered = raw.strip().lower()
+            if lowered not in {'1', '0', 'true', 'false', 'yes', 'no', 'on', 'off'}:
+                raise RuntimeError(f'环境变量 {env_name} 必须是布尔值')
+            cfg[key] = lowered in {'1', 'true', 'yes', 'on'}
+        elif key in {'html_server_port', 'workers'}:
+            try:
+                cfg[key] = int(raw.strip())
+            except ValueError as exc:
+                raise RuntimeError(f'环境变量 {env_name} 必须是整数') from exc
+        else:
+            cfg[key] = raw.strip()
 
     # Secret 只允许来自根目录 .env 或系统环境变量；系统环境变量优先。
     envf = PROJECT_ROOT / '.env'
@@ -224,8 +255,11 @@ def validate(cfg: dict) -> None:
         raise RuntimeError('feishu_output_headers 必须正好 6 列')
     if not isinstance(cfg.get('html_archive_root'), str) or not cfg['html_archive_root'].strip():
         raise RuntimeError('html_archive_root 必须是非空路径')
-    if not isinstance(cfg.get('html_archive_required'), bool):
-        raise RuntimeError('html_archive_required 必须是布尔值')
+    for key in ('html_archive_enabled', 'html_archive_required', 'html_server_enabled'):
+        if not isinstance(cfg.get(key), bool):
+            raise RuntimeError(f'{key} 必须是布尔值')
+    if not isinstance(cfg.get('html_server_bind'), str) or not cfg['html_server_bind'].strip():
+        raise RuntimeError('html_server_bind 必须是非空字符串')
 
 
 def ensure_dirs() -> None:

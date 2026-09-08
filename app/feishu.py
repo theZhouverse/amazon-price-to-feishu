@@ -133,12 +133,11 @@ def col_letter(n: int) -> str:
 
 def _detect_header_row(vals: list[list]) -> int:
     """在前几行里找含 'ASIN' 的表头行（0-based），找不到返回 -1"""
-    from weekly_mapping import cell_text
-    for i, row in enumerate(vals[:10]):
-        for cell in row:
-            if cell_text(cell).upper() == 'ASIN':
-                return i
-    return -1
+    # 与周报发现阶段共用同一套兼容规则：合法表头可能是
+    # ``ASIN\n(颜色/变体说明)``，不能在发现阶段识别成功、读取阶段又失败。
+    from weekly_mapping import find_asin_header
+    located = find_asin_header(vals)
+    return located[0] - 1 if located else -1
 
 
 def _resolve_cols(header_row: list, cfg: dict) -> dict:
@@ -171,14 +170,15 @@ def read_source_rows(vals: list[list], cfg: dict,
             return row[c - 1] if len(row) >= c else None
         asin_v = _cell(cols['asin'])
         asin = str(asin_v).strip() if asin_v is not None else ''
-        if not asin.startswith('B0'):
-            from product_links import normalize_product, ProductLinkError
-            try:
-                asin, _ = normalize_product(asin_v, cfg.get('source_marketplace', 'US'))
-            except ProductLinkError as exc:
-                if 'http' in str(asin_v).lower():
-                    raise RuntimeError(f'源行{idx}商品链接无效: {exc}') from exc
-                continue
+        from product_links import normalize_product, source_product_url, ProductLinkError
+        try:
+            asin, canonical_url = normalize_product(
+                asin_v, cfg.get('source_marketplace', 'US'))
+            source_url = source_product_url(asin_v, cfg.get('source_marketplace', 'US'), asin)
+        except ProductLinkError as exc:
+            if 'http' in str(asin_v).lower():
+                raise RuntimeError(f'源行{idx}商品链接无效: {exc}') from exc
+            continue
         rr = ReportRow(
             row_num=idx, asin=asin,
             sku=str(_cell(cols['sku']) or '').strip(),
@@ -186,6 +186,9 @@ def read_source_rows(vals: list[list], cfg: dict,
             normal_price=_num_or_none(_cell(cols['normal_price'])),
             h_type=str(_cell(cols['h_type']) or '').strip(),
             i_value=_parse_i_value(_cell(cols['i_value'])),
+            # 经过域名/ASIN校验的源链接优先用于请求；纯 ASIN 行回退标准链接。
+            product_url=source_url or canonical_url,
+            source_product_url=source_url,
         )
         k = _num_or_none(_cell(cols['target_price']))
         if k is not None:
@@ -544,19 +547,72 @@ class FeishuClient:
 
     def copy_file(self, file_token: str, file_type: str, name: str,
                   folder_token: str = '') -> dict:
-        """复制云文档到指定 Drive 目录；空 folder_token 表示应用根目录。"""
+        """复制云文档到指定 Drive 目录；空 folder_token 表示应用根目录。
+
+        Drive copy 是有副作用的 POST。网关返回 5xx/传输超时后，服务端
+        可能已经完成复制但响应丢失；因此每次重试前先按精确名称回查根目录，
+        找到唯一副本就复用，避免重复创建周报快照。
+        """
         body = {'name': name, 'type': file_type, 'folder_token': folder_token}
-        r = self._client.post(f'/drive/v1/files/{file_token}/copy',
-                              json=body, headers=self._headers())
-        r.raise_for_status()
-        d = r.json()
-        if d.get('code') != 0:
-            raise RuntimeError(f"创建飞书副本失败: {d.get('msg')} (code={d.get('code')})")
-        file_info = (d.get('data') or {}).get('file') or {}
-        token = file_info.get('token') or ''
-        if not token:
-            raise RuntimeError('创建飞书副本成功但响应缺少副本 Token')
-        return file_info
+        endpoint = f'/drive/v1/files/{file_token}/copy'
+        last_error = None
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                r = self._client.post(endpoint, json=body, headers=self._headers())
+                status = getattr(r, 'status_code', None)
+                # 504/5xx and the common 408/429 responses are transient at the
+                # Drive gateway boundary. Do not retry ordinary 4xx validation
+                # errors, which indicate a real configuration/permission issue.
+                if isinstance(status, int) and (status >= 500 or status in (408, 429)):
+                    r.raise_for_status()
+                    raise RuntimeError(f'Feishu copy transient HTTP {status}')
+                r.raise_for_status()
+                d = r.json()
+                if d.get('code') != 0:
+                    raise RuntimeError(f"创建飞书副本失败: {d.get('msg')} (code={d.get('code')})")
+                file_info = (d.get('data') or {}).get('file') or {}
+                token = file_info.get('token') or ''
+                if not token:
+                    raise RuntimeError('创建飞书副本成功但响应缺少副本 Token')
+                return file_info
+            except (httpx.TransportError, httpx.HTTPStatusError, RuntimeError) as exc:
+                status = getattr(getattr(exc, 'response', None), 'status_code', None)
+                transient = isinstance(exc, httpx.TransportError) or (
+                    isinstance(status, int) and (status >= 500 or status in (408, 429)))
+                if not transient:
+                    raise
+                last_error = exc
+                # A timed-out POST may already have created the copy. Recover it
+                # before issuing another side-effecting POST.
+                recovered = self._find_root_copy(name, file_type)
+                if recovered:
+                    return recovered
+                if attempt + 1 < max_attempts:
+                    time.sleep(2 + attempt * 3)
+        recovered = self._find_root_copy(name, file_type)
+        if recovered:
+            return recovered
+        raise RuntimeError(
+            f'创建飞书副本在 {max_attempts} 次尝试后仍失败: {last_error}') from last_error
+
+    def _find_root_copy(self, name: str, file_type: str) -> dict | None:
+        """按精确名称查找复制请求可能已创建的根目录文件。"""
+        try:
+            files = self.list_root_files(page_size=200)
+        except (httpx.TransportError, httpx.HTTPStatusError, RuntimeError):
+            return None
+        matches = [item for item in files
+                   if item.get('name') == name
+                   and (not item.get('type') or item.get('type') == file_type)
+                   and (item.get('token') or item.get('file_token'))]
+        if len(matches) > 1:
+            raise RuntimeError(f'Drive 根目录存在多个同名副本，禁止自动选择: {name}')
+        if not matches:
+            return None
+        item = dict(matches[0])
+        item['token'] = item.get('token') or item.get('file_token')
+        return item
 
     def list_root_files(self, page_size: int = 50) -> list[dict]:
         """只读列出应用 Drive 根目录最近文件，用于找回已创建的 TEST PoC。"""

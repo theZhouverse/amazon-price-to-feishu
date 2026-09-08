@@ -128,7 +128,7 @@ class TestTabPool(unittest.TestCase):
         cfg = {'page_timeout': 5, 'price_wait_timeout': 1,
                'ambiguous_price_ratio': '0.05'}
         result = b.fetch_once(tab, row, cfg)
-        self.assertEqual(result.status, PageStatus.CRAWL_ERROR)
+        self.assertEqual(result.status, PageStatus.IDENTITY_MISMATCH)
         self.assertIn('identity_mismatch', result.error)
         tab.wait.ele_displayed.assert_not_called()
 

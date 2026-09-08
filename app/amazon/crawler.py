@@ -135,7 +135,16 @@ class AmazonBrowser:
                     break
                 except Exception:
                     time.sleep(2)
-            self.location_verified = self._set_postal_code()
+            # Amazon 地址组件可能在首次打开时仍显示旧状态（例如
+            # `Update location`），这属于初始化瞬态，不应要求整轮任务
+            # 由调度器重启。有限重试并保留最后一次诊断；连续失败才阻断。
+            self.location_verified = False
+            for location_attempt in range(3):
+                self.location_verified = self._set_postal_code()
+                if self.location_verified:
+                    break
+                if location_attempt < 2:
+                    self._sleep(2)
             if strict_location and not self.location_verified:
                 print(f'[setup] {self.marketplace} 邮编未能在页面地址栏验证: '
                       f'{self.postal_code}', flush=True)
@@ -231,6 +240,7 @@ class AmazonBrowser:
         cr.location_verified = self.location_verified
         url = row.product_url or self.profile.product_url(row.asin)
         cr.product_url = url
+        cr.source_product_url = getattr(row, 'source_product_url', '') or ''
         deadline = cfg.get('_deadline', time.monotonic() + float(cfg.get('per_asin_timeout', 90)))
         def budget(limit):
             remaining = deadline - time.monotonic()
@@ -240,11 +250,27 @@ class AmazonBrowser:
         try:
             tab.set.timeouts(base=budget(cfg['page_timeout']),
                              page_load=budget(cfg['page_timeout']), script=budget(cfg['page_timeout']))
-            tab.get(url, timeout=budget(cfg['page_timeout']), retry=0)
+            # DrissionPage may report a navigation failure by returning False
+            # instead of raising.  Never inspect the DOM after that point: the
+            # tab can still contain the preceding ASIN and would otherwise
+            # produce a false identity_mismatch.
+            navigation_ok = tab.get(url, timeout=budget(cfg['page_timeout']), retry=0)
+            if navigation_ok is False:
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = 'navigation_failed: tab.get 返回失败'
+                return cr
             try:
-                tab.wait.doc_loaded(timeout=budget(cfg['page_timeout']))
-            except Exception:
-                pass
+                loaded = tab.wait.doc_loaded(timeout=budget(cfg['page_timeout']))
+            except Exception as exc:
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = f'navigation_timeout: 页面未完成加载 ({type(exc).__name__})'
+                return cr
+            # Some DrissionPage versions return False on a doc-loaded timeout
+            # without raising.  Treat it exactly like an exception.
+            if loaded is False:
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = 'navigation_timeout: 页面未完成加载 (doc_loaded=False)'
+                return cr
             page_meta = tab.run_js('return {url:location.href,title:document.title};',
                                    timeout=budget(cfg['page_timeout']))
             cr.page_url = page_meta['url']
@@ -280,7 +306,7 @@ class AmazonBrowser:
                 r'/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)',
                 cr.page_url or '', re.IGNORECASE)
             if not identity or identity.group(1).upper() != row.asin.upper():
-                cr.status = PageStatus.CRAWL_ERROR
+                cr.status = PageStatus.IDENTITY_MISMATCH
                 cr.error = (f'identity_mismatch: 请求 {row.asin}，最终页面 '
                             f'{identity.group(1).upper() if identity else "unknown"}')
                 return cr
@@ -324,7 +350,7 @@ class AmazonBrowser:
             identity = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)', cr.page_url, re.I)
             if (not identity or identity.group(1).upper() != row.asin.upper()
                     or (sample.get('asin') and sample['asin'].upper() != row.asin.upper())):
-                cr.status = PageStatus.CRAWL_ERROR
+                cr.status = PageStatus.IDENTITY_MISMATCH
                 cr.error = 'identity_mismatch: 读取价格时商品身份已变化'
                 return cr
             if (urlsplit(cr.page_url).hostname or '').lower() not in (self.profile.domain, 'www.' + self.profile.domain):
@@ -445,7 +471,7 @@ class AmazonBrowser:
                 if attempts == 1:          # 刷新一次确认售罄
                     continue
                 break
-            if st == PageStatus.CRAWL_ERROR:
+            if st in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH):
                 if self.is_risk_result(last):
                     cooldown = random.uniform(cfg['risk_cooldown_min'], cfg['risk_cooldown_max'])
                     # 冷却属于单 ASIN 总预算；不得因 60~180 秒等待突破绝对 deadline。
