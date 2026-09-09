@@ -31,7 +31,7 @@
 
 > 本节是实施任务清单，SPEC中的新增内容目前只代表目标规格，不代表代码已经实现或云端已经验收。
 
-### 最新开发/只读验收进度（2026-09-09）
+### 最新开发/只读验收进度（2026-09-10）
 
 - [x] 修复真实紫鸟 CLI `.cmd` 多行脚本截断、中文页面常量编码失真、CLI 更新通知/评论签名风险误报、详情返回不生效和Shadow DOM空节点异常；加入列表/详情有界渲染重试、分页上限前置停止和详情后按页码恢复，并补充回归测试。
 - [x] 真实单条详情—返回探针通过：详情字段可回读，重新访问 Feedback Manager 后 marker、20行当前页和唯一分页按钮恢复正常；未写入飞书。
@@ -40,6 +40,9 @@
 - [x] 两个店铺都完成单条低星详情只读复核：详情标记、订单路由身份、订单商品编号、ASIN、SKU均可回读；无登录、验证码或风控信号，且每个店铺完成后关闭上下文。
 - [x] 详情选择器登记为`text:订单内容`、`data-test-id:order-id-label`、`label:订单商品编号`、`label:ASIN`、`label:SKU`；标签值去除展示冒号，订单号支持详情路由回退并继续做身份比对。
 - [x] 真实页面确认分页控件是唯一可见`kat-link`文本`下一个 >`，内部链接位于Shadow DOM；代码按前缀识别并在“有数据但无分页控件”时fail-close，新增离线回归覆盖该阻断。
+- [x] 增加`page_date_order=newest_first`和安全日期边界：页内日期缺失/排序异常阻断，整页早于窗口起点时停止历史分页；增加探针专用`max_detail_attempts`，默认0不限制生产详情读取，探针达到上限时安全关闭，不推进状态。
+- [x] 2026-09-10 受限环境和正常Windows权限分别核验紫鸟CLI：受限环境Keychain不可见；正常用户权限下项目级CLI `doctor`、Keychain、Bridge、客户端登录和两店列表通过。真实结构诊断回读20行当前页、两个标记候选和无登录信号；修复可见标记过滤后单店探针进入详情链路，但因探针详情上限主动阻断，未计为正式成功。
+- [x] Feedback定向离线回归已扩展为30项，全部通过；没有写入业务行，`feedback.enabled=false`保持。
 - [x] 全局紫鸟 CLI 已在用户授权后完成只读连通性复核：`doctor`、Keychain/API认证、ZClaw Bridge、客户端登录状态和`store list --all`均通过；确认两店为`26782671389969`（冬豚）和`26686718929338`（北蓉）。
 - [x] 两店已分别打开Seller Central并到达准确地址`https://sellercentral.amazon.com/feedback-manager/index.html`；两店都确认【最新反馈】、固定5列表头和20条当前页数据，未出现登录、验证码或风控信号。基础`/feedback-manager`空壳地址已列为不可用来源。
 - [x] 已登记主表真实选择器并适配Amazon KAT组件：星级从`kat-star-rating[value]`读取，订单号从`kat-link`及其Shadow DOM链接读取，点击目标使用唯一订单链接；代码改用`domcontentloaded`加有界等待，避免Feedback SPA的`networkidle`不收口。

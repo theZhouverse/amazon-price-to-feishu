@@ -4,7 +4,7 @@ import unittest
 
 from seller_feedback_browser import (FeedbackDataError, FeedbackStoreCollector,
                                       SafetyStop, ZiniaoCliRunner, _detail_script,
-                                      _guard_page_output,
+                                      _guard_page_output, _read_script,
                                       _click_next_script, validate_feedback_manager_url)
 
 
@@ -110,6 +110,9 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertEqual(result['detail_complete'], 2)
         self.assertEqual(len(result['pages']), 2)
         self.assertEqual(result['pages'][0]['items'][0]['asin'], 'B000TEST01')
+        self.assertEqual(result['pages'][0]['next'], {'count': 1, 'disabled': False})
+        self.assertEqual(result['pages'][1]['next'], {'count': 1, 'disabled': True})
+        self.assertFalse(result['pages'][0]['boundary_reached'])
         self.assertEqual(runner.calls[0], ('open', 'store-id-a'))
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
 
@@ -228,6 +231,71 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertFalse(any(call[0] == 'exec' and call[1] == '/* feedback-click-next'
                              for call in runner.calls))
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_newest_first_stops_when_page_is_past_window(self):
+        runner = FakeRunner()
+        original = runner.page_exec
+
+        def old_page(store_id, script, timeout_ms=30000):
+            if 'feedback-read' in script:
+                return {
+                    'ok': True, 'marker_found': True, 'store_identity': 'STORE-A',
+                    'signature': 'old-page',
+                    'rows': [
+                        {'feedback_id': 'OLD-1', 'feedback_date': '2026-09-02',
+                         'rating': '4 stars', 'order_id': 'ORDER-OLD', 'content': 'old'},
+                    ],
+                    'next': {'count': 1, 'disabled': False},
+                }
+            return original(store_id, script, timeout_ms)
+
+        runner.page_exec = old_page
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        result = collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertTrue(result['boundary_reached'])
+        self.assertEqual(result['boundary_page'], 1)
+        self.assertEqual(result['next_clicks'], 0)
+        self.assertFalse(any(call[0] == 'exec' and call[1] == '/* feedback-click-next'
+                             for call in runner.calls))
+
+    def test_unparseable_page_date_is_safety_stop(self):
+        runner = FakeRunner()
+        original = runner.page_exec
+
+        def bad_date(store_id, script, timeout_ms=30000):
+            value = original(store_id, script, timeout_ms)
+            if 'feedback-read' in script and isinstance(value, dict):
+                value['rows'][0]['feedback_date'] = ''
+            return value
+
+        runner.page_exec = bad_date
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaises(SafetyStop):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_detail_attempt_cap_stops_probe_without_next_page(self):
+        runner = FakeRunner()
+        collector = FeedbackStoreCollector(
+            self.store(), runner, max_detail_attempts=1,
+            page_wait_min=1, page_wait_max=1, detail_wait_min=1,
+            detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaises(SafetyStop):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertFalse(any(call[0] == 'exec' and call[1] == '/* feedback-click-next'
+                             for call in runner.calls))
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_read_script_ignores_hidden_marker_duplicates(self):
+        script = _read_script(self.store()['selectors'])
+        self.assertIn("querySelectorAll(cfg.marker)].filter(visible)", script)
 
     def test_cli_page_exec_compacts_multiline_script_for_cmd_transport(self):
         captured = {}

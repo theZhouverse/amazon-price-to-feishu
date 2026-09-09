@@ -104,6 +104,7 @@
         "store_id": "26782671389969",
         "expected_store_identity": "26782671389969",
         "identity_mode": "cli_store_context",
+        "page_date_order": "newest_first",
         "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
         "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
         "selectors": {
@@ -131,6 +132,7 @@
         "store_id": "26686718929338",
         "expected_store_identity": "26686718929338",
         "identity_mode": "cli_store_context",
+        "page_date_order": "newest_first",
         "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
         "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
         "selectors": {

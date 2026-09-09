@@ -548,7 +548,10 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                 source_url = str(response.get('source_url') or '')
                 store_report.update({
                     key: response.get(key)
-                    for key in ('detail_attempted', 'detail_complete', 'next_clicks', 'risk_stopped')
+                    for key in (
+                        'detail_attempted', 'detail_complete', 'next_clicks',
+                        'boundary_reached', 'boundary_page', 'risk_stopped',
+                    )
                     if key in response
                 })
             rows, stats = normalize_feedback_pages(

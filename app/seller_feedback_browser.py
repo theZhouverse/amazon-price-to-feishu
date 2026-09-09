@@ -298,7 +298,8 @@ def _read_script(selectors: dict) -> str:
       ];
       const isNext = value => new RegExp('^(' + nextWords.join('|') + '|next)', 'i')
         .test(String(value || '').replace(/\\s+/g, ''));
-      const markerNodes = cfg.marker ? [...document.querySelectorAll(cfg.marker)] : [];
+      const markerNodes = cfg.marker
+        ? [...document.querySelectorAll(cfg.marker)].filter(visible) : [];
       const latestFeedbackText = String.fromCharCode(0x6700, 0x65b0, 0x53cd, 0x9988);
       const exactMarkers = markerNodes.filter(el => text(el) === latestFeedbackText);
       const marker = exactMarkers.length === 1 ? exactMarkers[0]
@@ -499,6 +500,7 @@ class FeedbackStoreCollector:
     def __init__(self, store: dict, runner: FeedbackRunner, *, page_wait_min: float = 8.0,
                  page_wait_max: float = 12.0, detail_wait_min: float = 8.0,
                  detail_wait_max: float = 12.0, max_pages: int = 50,
+                 max_detail_attempts: int = 0,
                  sleep_fn: Callable = time.sleep):
         self.store = dict(store)
         self.runner = runner
@@ -507,8 +509,22 @@ class FeedbackStoreCollector:
         self.detail_wait_min = detail_wait_min
         self.detail_wait_max = detail_wait_max
         self.max_pages = max_pages
+        self.max_detail_attempts = int(max_detail_attempts)
+        if self.max_detail_attempts < 0:
+            raise FeedbackDataError(
+                f'店铺 {self.key}: max_detail_attempts 不能为负数'
+            )
         self.sleep_fn = sleep_fn
         self.selectors = _required_selector_config(self.store)
+        self.page_date_order = str(
+            self.store.get('page_date_order')
+            or self.selectors.get('page_date_order')
+            or 'newest_first'
+        ).strip().lower()
+        if self.page_date_order not in {'newest_first', 'oldest_first'}:
+            raise FeedbackDataError(
+                f'店铺 {self.key}: page_date_order 必须是 newest_first 或 oldest_first'
+            )
 
     @property
     def key(self) -> str:
@@ -604,6 +620,42 @@ class FeedbackStoreCollector:
             payload = self._read_ready_page(store_id)
         return payload
 
+    def _page_dates(self, payload: dict) -> list:
+        """Return parsed row dates, refusing to infer order from bad dates."""
+        dates = []
+        for row in payload.get('rows') or []:
+            if not isinstance(row, dict):
+                return []
+            value = parse_feedback_date(row.get('feedback_date'))
+            if value is None:
+                return []
+            dates.append(value)
+        return dates
+
+    def _validate_page_date_order(self, dates: list, previous_last_date=None) -> None:
+        """Fail closed when the configured newest/oldest ordering is contradicted."""
+        if len(dates) < 2:
+            if previous_last_date is not None and dates:
+                if self.page_date_order == 'newest_first' and dates[0] > previous_last_date:
+                    raise SafetyStop('反馈分页日期顺序异常，拒绝猜测分页方向')
+                if self.page_date_order == 'oldest_first' and dates[0] < previous_last_date:
+                    raise SafetyStop('反馈分页日期顺序异常，拒绝猜测分页方向')
+            return
+        if self.page_date_order == 'newest_first':
+            in_order = all(left >= right for left, right in zip(dates, dates[1:]))
+            page_boundary_ok = previous_last_date is None or dates[0] <= previous_last_date
+        else:
+            in_order = all(left <= right for left, right in zip(dates, dates[1:]))
+            page_boundary_ok = previous_last_date is None or dates[0] >= previous_last_date
+        if not in_order or not page_boundary_ok:
+            raise SafetyStop('反馈分页日期顺序异常，拒绝猜测分页方向')
+
+    def _past_window_boundary(self, dates: list, start) -> bool:
+        """Stop only when a verified newest-first page is entirely too old."""
+        if not dates or start is None or self.page_date_order != 'newest_first':
+            return False
+        return max(dates) < start
+
     def __call__(self, *, window: dict | None = None) -> dict:
         started = time.monotonic()
         store_id = str(self.store.get('store_id') or '').strip()
@@ -614,6 +666,8 @@ class FeedbackStoreCollector:
         end = parse_feedback_date((window or {}).get('end')) if window else None
         pages = []
         detail_attempted = detail_complete = next_clicks = 0
+        boundary_reached = False
+        boundary_page = None
         self.runner.store_open(store_id)
         try:
             _sleep_random(5.0, 7.0, self.sleep_fn)
@@ -621,12 +675,22 @@ class FeedbackStoreCollector:
             self.runner.page_wait_nav(store_id, 30000)
             _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
             previous_signature = None
+            previous_last_date = None
             for page_number in range(1, self.max_pages + 1):
                 payload = self._read_ready_page(store_id)
                 signature = str(payload.get('signature') or '')
                 if previous_signature is not None and signature == previous_signature:
                     raise SafetyStop('反馈【下一个】点击后页面内容未变化，停止重复读取')
                 previous_signature = signature
+                page_dates = self._page_dates(payload)
+                if payload['rows'] and not page_dates:
+                    raise SafetyStop('反馈页面存在无法解析的日期，拒绝猜测分页边界')
+                self._validate_page_date_order(page_dates, previous_last_date)
+                if page_dates:
+                    previous_last_date = (
+                        min(page_dates) if self.page_date_order == 'newest_first'
+                        else max(page_dates)
+                    )
                 page_items = []
                 for primary in payload['rows']:
                     if not isinstance(primary, dict):
@@ -646,6 +710,11 @@ class FeedbackStoreCollector:
                             item['_detail_status'] = 'partial'
                             item['_detail_error'] = '符合条件的反馈缺少订单编号'
                         else:
+                            if (self.max_detail_attempts
+                                    and detail_attempted >= self.max_detail_attempts):
+                                raise SafetyStop(
+                                    f'反馈详情读取达到安全上限 {self.max_detail_attempts} 次，停止读取'
+                                )
                             detail_attempted += 1
                             clicked = self.runner.page_exec(
                                 store_id, _click_order_script(self.selectors, order_id), 30000)
@@ -684,13 +753,25 @@ class FeedbackStoreCollector:
                                 if in_detail:
                                     self._return_to_feedback(store_id, page_number)
                     page_items.append(item)
+                boundary_hit = self._past_window_boundary(page_dates, start)
+                next_info = payload.get('next') or {}
                 pages.append({
                     'source_url': url,
                     'page_number': page_number,
                     'items': page_items,
                     'signature': signature,
+                    'date_min': min(page_dates).isoformat() if page_dates else '',
+                    'date_max': max(page_dates).isoformat() if page_dates else '',
+                    'next': {
+                        'count': next_info.get('count', 0),
+                        'disabled': bool(next_info.get('disabled')),
+                    },
+                    'boundary_reached': boundary_hit,
                 })
-                next_info = payload.get('next') or {}
+                if boundary_hit:
+                    boundary_reached = True
+                    boundary_page = page_number
+                    break
                 if next_info.get('count', 0) == 0:
                     if payload['rows']:
                         raise SafetyStop(
@@ -732,6 +813,8 @@ class FeedbackStoreCollector:
             'detail_attempted': detail_attempted,
             'detail_complete': detail_complete,
             'next_clicks': next_clicks,
+            'boundary_reached': boundary_reached,
+            'boundary_page': boundary_page,
             'elapsed_seconds': round(time.monotonic() - started, 3),
         }
 
