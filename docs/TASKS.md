@@ -56,6 +56,7 @@
 - [x] 结果发布器本地切换到 A:V，当前顺序为A:G源字段、H:M价格/币种、N:T前端勾叉、U/V时间戳/链接；识别旧 A:P/A:O 布局，写前备份、旧列迁移和整段回读逻辑已加入；尚未对真实固定结果表执行迁移验收。
 - [x] 2026-09-09 已在开发副本将 `seller_feedback.py` 重构为本次`<=3`、严格9列、二级订单详情合并、首次7日/后续3日窗口、近10日留存、幂等和写后回读核心；新增 `seller_feedback_browser.py`，按登记选择器串行操作两店并对【最新反馈】、【下一个】、订单身份和风控信号 fail-close。当前只完成离线假桥接回归，真实Seller Central会话/选择器/固定Sheet ID尚未验收，不能勾选F1-F10完成。
 - [x] 2026-09-09 参考项目级紫鸟 CLI 只读复核：使用 `C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\ziniao-cli.cmd` 的 `doctor` 和 `store list --all`，Keychain/API认证、ZClaw Bridge 和客户端登录状态通过，返回冬豚 `26782671389969`、北蓉 `26686718929338` 两店；全局 npm CLI 的 Keychain 缺失仅作为错误路径记录。没有打开店铺、没有访问 Seller Central、没有写入飞书；真实Feedback验收仍待页面身份、选择器和固定Sheet ID门禁。
+- [x] 2026-09-09 Feedback管理器单店只读探针：冬豚店铺可打开，项目级 CLI 以 `domcontentloaded` 成功到达 `https://sellercentral.amazon.com/feedback-manager`；脱敏 DOM 诊断未发现页面标题、【最新反馈】或【下一个】，可见文本仅389字符，未触发登录/验证码/风控标志。已关闭店铺，未点击订单、未翻页、未读写飞书；页面结构未确认，不能勾选F1/F3/F4/F10。
 - [x] 增加显式 `scheduled_slot`、周一早间沿用、周一下午切换、工作日稳态 pending 记录，以及调度包装器向Python传递槽位；尚未重新安装并实测四条Windows计划任务。
 - [x] 2026-09-08 开发副本实测当前登记序号4：只读发现新快照19个子表、18个业务映射（US=11、CA=7），排除`BI源数据`；ASIN/商品链接审计有效720、无效0、辅助标签跳过294。随后创建独立快照副本（Token仅在日志中脱敏保存），原周报未写入。
 - [x] 前端单条实测：US `B0C5R56QTF` 使用新快照完成`amazon.com`/USD/90210/ASIN一致性门禁，尺寸`2.5x8`与页面`2.5' x 8'`匹配；首次样本暴露导航/语言误报后，收紧全局容器、尺寸结构和单位比较并升级前端规则`2026-09-08-v2`。CA首条`B0D9NT9JQN`保留真实`identity_mismatch`，N:T显示`-`且bundle为`unknown`，未绕过重试、未写飞书。

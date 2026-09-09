@@ -12,6 +12,12 @@
 - 同一项目级 CLI 的 `store list --all --format json` 只读返回两个店铺：冬豚 `26782671389969`、北蓉 `26686718929338`。本次没有执行 `store open`，没有访问 Seller Central，没有读取或写入`Feedback差评汇总`。
 - Feedback 适配层已经把该项目级 CLI 放在全局 CLI 之前；后续真实验收必须沿用这条路径，认证状态以项目级 CLI 为准，不能因为全局 CLI 的 Keychain 缺失而阻断或重建凭证。
 
+## 2026-09-09 Feedback管理器单店只读探针
+
+- 使用项目级 CLI 只打开冬豚 `26782671389969`，先以 `networkidle` 导航到 `https://sellercentral.amazon.com/feedback-manager`；该等待条件未在预期时间内收口，未继续执行页面脚本，随后单独关闭店铺上下文。
+- 仅重试一次技术等待条件，改用 `domcontentloaded` 后导航返回成功；等待约8秒后执行脱敏 DOM 诊断：当前 URL正确，但页面标题为空、可见文本长度仅389、【最新反馈】计数为0、【下一个】计数为0，未检测到登录/验证码/风控标志。
+- 该探针结论为`blocked/structure_not_confirmed`，不能猜测选择器或把空页面当作无差评数据；本次未点击订单、未翻页、未读取评论/订单字段、未写入飞书，店铺已关闭。下一步需要先确认该会话实际渲染出的Feedback管理器页面结构，再登记选择器并从单店小批开始。
+
 ## 2026-09-09 前端图片与品牌故事列拆分
 
 - 用户确认品牌故事定位为页面中的精确标题`From the brand`；结果表不再把商品主图和品牌故事图片合并到同一列。当前开发副本目标布局为A:V：N商品主图、O`From the brand`品牌故事图片、P尺寸、Q BSR、R父子ASIN、S环保、T Amazon's Choice、U时间戳、V Amazon链接。
