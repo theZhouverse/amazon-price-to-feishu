@@ -118,11 +118,11 @@
           "feedback_id_selector": "",
           "order_link_selector": "kat-table-cell.col_order_id kat-link",
           "detail": {
-            "marker": "",
-            "order_id_selector": "",
-            "order_item_number_selector": "",
-            "asin_selector": "",
-            "sku_selector": ""
+            "marker": "text:订单内容",
+            "order_id_selector": "data-test-id:order-id-label",
+            "order_item_number_selector": "label:订单商品编号",
+            "asin_selector": "label:ASIN",
+            "sku_selector": "label:SKU"
           }
         }
       },
@@ -145,11 +145,11 @@
           "feedback_id_selector": "",
           "order_link_selector": "kat-table-cell.col_order_id kat-link",
           "detail": {
-            "marker": "",
-            "order_id_selector": "",
-            "order_item_number_selector": "",
-            "asin_selector": "",
-            "sku_selector": ""
+            "marker": "text:订单内容",
+            "order_id_selector": "data-test-id:order-id-label",
+            "order_item_number_selector": "label:订单商品编号",
+            "asin_selector": "label:ASIN",
+            "sku_selector": "label:SKU"
           }
         }
       }

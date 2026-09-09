@@ -252,6 +252,9 @@ def _read_script(selectors: dict) -> str:
       const label = el => text(el) || shadowText(el)
         || (el?.getAttribute('aria-label') || '').trim()
         || (el?.getAttribute('label') || '').trim();
+      const isNext = value => /^(下一个|下一页|next)/i.test(
+        String(value || '').replace(/\\s+/g, '')
+      );
       const markerNodes = cfg.marker ? [...document.querySelectorAll(cfg.marker)] : [];
       const exactMarkers = markerNodes.filter(el => text(el) === '最新反馈');
       const marker = exactMarkers.length === 1 ? exactMarkers[0]
@@ -286,8 +289,7 @@ def _read_script(selectors: dict) -> str:
         row.rating, row.order_id, row.content].join('\\u241f')).join('\\u241e');
       const buttons = [...document.querySelectorAll(
         'button,a,[role="button"],kat-button,kat-link'
-      )].filter(visible).filter(el => ['下一个', 'Next', '下一页']
-        .includes(label(el)));
+      )].filter(visible).filter(el => isNext(label(el)));
       const next = {{ count: buttons.length,
         disabled: buttons.length === 1 && (buttons[0].disabled ||
           buttons[0].getAttribute('aria-disabled') === 'true'
@@ -312,9 +314,12 @@ def _click_next_script() -> str:
       const label = el => text(el) || shadowText(el)
         || (el.getAttribute('aria-label') || '').trim()
         || (el.getAttribute('label') || '').trim();
+      const isNext = value => /^(下一个|下一页|next)/i.test(
+        String(value || '').replace(/\\s+/g, '')
+      );
       const nodes = [...document.querySelectorAll(
         'button,a,[role="button"],kat-button,kat-link'
-      )].filter(visible).filter(el => ['下一个', 'Next', '下一页'].includes(label(el)));
+      )].filter(visible).filter(el => isNext(label(el)));
       if (nodes.length !== 1) return {clicked: false, count: nodes.length};
       const el = nodes[0];
       if (el.disabled || el.getAttribute('aria-disabled') === 'true'
@@ -363,6 +368,10 @@ def _click_order_script(selectors: dict, order_id: str) -> str:
 
 
 def _detail_script(detail: dict) -> str:
+    # Detail selectors may be CSS selectors or the verified label forms
+    # ``text:<exact visible text>``, ``label:<exact visible field label>`` and
+    # ``data-test-id:<value>``.  The latter two avoid guessing a dynamic class
+    # when Seller Central renders a value as adjacent text nodes.
     config = json.dumps({
         'marker': detail['marker'],
         'order': detail['order_id_selector'],
@@ -372,11 +381,57 @@ def _detail_script(detail: dict) -> str:
     }, ensure_ascii=False)
     return f'''/* feedback-read-detail */ JSON.stringify((() => {{
       const cfg = {config};
-      const text = selector => {{ const el = document.querySelector(selector);
-        return (el?.innerText || el?.textContent || '').trim(); }};
-      return {{ ok: true, marker_found: Boolean(document.querySelector(cfg.marker)),
-        order_id: text(cfg.order), order_item_number: text(cfg.item),
-        asin: text(cfg.asin), sku: text(cfg.sku), url: location.href }};
+      const text = el => (el?.innerText || el?.textContent || '').trim();
+      const ownText = el => [...(el?.childNodes || [])]
+        .filter(node => node.nodeType === Node.TEXT_NODE)
+        .map(node => node.textContent || '').join('').trim();
+      const visible = el => {{
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none'
+          && style.visibility !== 'hidden' && style.opacity !== '0';
+      }};
+      const exactText = value => [...document.querySelectorAll(
+        'span,div,th,label,[role="heading"]'
+      )].find(el => visible(el) && ownText(el) === value) || null;
+      const resolve = selector => {{
+        const value = String(selector || '');
+        if (value.startsWith('text:') || value.startsWith('label:'))
+          return exactText(value.slice(value.indexOf(':') + 1));
+        if (value.startsWith('data-test-id:'))
+          return document.querySelector('[data-test-id="'
+            + value.slice('data-test-id:'.length).replace(/"/g, '\\"') + '"]');
+        return value ? document.querySelector(value) : null;
+      }};
+      const labeledValue = selector => {{
+        const value = String(selector || '');
+        const element = resolve(value);
+        if (!element) return '';
+        const clean = rendered => String(rendered || '')
+          .replace(/^\\s*[:：]\\s*/, '').trim();
+        if (value.startsWith('text:') || value.startsWith('label:')) {{
+          const parent = element.parentElement;
+          if (!parent) return '';
+          return clean([...parent.childNodes]
+            .filter(node => node !== element && !element.contains(node))
+            .map(node => node.nodeType === Node.TEXT_NODE
+              ? (node.textContent || '') : text(node))
+            .join(' ').replace(/\\s+/g, ' '));
+        }}
+        const rendered = text(element);
+        if (value.startsWith('data-test-id:'))
+          return clean(rendered.replace(/^订单编号：#?\\s*/, ''));
+        return clean(rendered);
+      }};
+      const marker = resolve(cfg.marker);
+      const route = location.href.match(/\\/orders-v3\\/order\\/([^/?#]+)/);
+      const routeOrderId = route ? decodeURIComponent(route[1]) : '';
+      const orderId = labeledValue(cfg.order) || routeOrderId;
+      return {{ ok: true, marker_found: Boolean(marker),
+        order_id: orderId,
+        order_item_number: labeledValue(cfg.item),
+        asin: labeledValue(cfg.asin), sku: labeledValue(cfg.sku), url: location.href }};
     }})())'''
 
 
@@ -541,7 +596,13 @@ class FeedbackStoreCollector:
                     'signature': signature,
                 })
                 next_info = payload.get('next') or {}
-                if next_info.get('disabled') or next_info.get('count', 0) == 0:
+                if next_info.get('count', 0) == 0:
+                    if payload['rows']:
+                        raise SafetyStop(
+                            '反馈页面没有可确认的【下一个】按钮，拒绝静默截断分页'
+                        )
+                    break
+                if next_info.get('disabled'):
                     break
                 if next_info.get('count') != 1:
                     raise SafetyStop(

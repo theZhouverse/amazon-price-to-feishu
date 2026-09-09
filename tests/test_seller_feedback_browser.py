@@ -2,7 +2,8 @@
 import unittest
 
 from seller_feedback_browser import (FeedbackDataError, FeedbackStoreCollector,
-                                      SafetyStop, validate_feedback_manager_url)
+                                      SafetyStop, _detail_script,
+                                      validate_feedback_manager_url)
 
 
 def selectors():
@@ -146,6 +147,38 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         with self.assertRaises(SafetyStop):
             collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_missing_next_with_rows_is_safety_stop(self):
+        runner = FakeRunner()
+        original = runner.page_exec
+
+        def missing_next(store_id, script, timeout_ms=30000):
+            value = original(store_id, script, timeout_ms)
+            if 'feedback-read' in script and isinstance(value, dict):
+                value['next'] = {'count': 0, 'disabled': False}
+            return value
+
+        runner.page_exec = missing_next
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaises(SafetyStop):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_detail_script_accepts_verified_label_selector_forms(self):
+        script = _detail_script({
+            'marker': 'text:订单内容',
+            'order_id_selector': 'data-test-id:order-id-label',
+            'order_item_number_selector': 'label:订单商品编号',
+            'asin_selector': 'label:ASIN',
+            'sku_selector': 'label:SKU',
+        })
+        self.assertIn('text:订单内容', script)
+        self.assertIn('data-test-id:order-id-label', script)
+        self.assertIn('label:订单商品编号', script)
+        self.assertIn('startsWith', script)
 
 
 if __name__ == '__main__':
