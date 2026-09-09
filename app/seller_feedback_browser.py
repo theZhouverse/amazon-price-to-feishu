@@ -90,7 +90,42 @@ def parse_cli_json(stdout: str) -> object:
 
 
 def _guard_page_output(value: object) -> None:
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    # The CLI may attach an informational `_notice` (for example an available
+    # CLI update) beside the actual page result.  Scan the result payload for
+    # Amazon risk signals, not unrelated bridge metadata, while still falling
+    # back to the complete value for ordinary error/status responses.
+    guarded = value
+    if isinstance(value, dict):
+        if 'result' in value:
+            guarded = value.get('result')
+        else:
+            data = value.get('data')
+            while isinstance(data, dict) and 'result' not in data and isinstance(data.get('data'), dict):
+                data = data.get('data')
+            if isinstance(data, dict) and 'result' in data:
+                guarded = data.get('result')
+    if isinstance(guarded, str):
+        try:
+            parsed = json.loads(guarded)
+        except json.JSONDecodeError:
+            text = guarded
+        else:
+            # Page scripts return structured rows.  Parse them before scanning
+            # so ordinary review text such as "login" is not mistaken for a
+            # Seller Central login page.
+            return _guard_page_output(parsed)
+    elif isinstance(guarded, dict):
+        # Never scan business fields such as comment/content/order_id.  Risk
+        # signals belong to page/bridge metadata and are checked below.
+        business_fields = {
+            'rows', 'items', 'content', 'comment', 'feedback', 'order_id',
+            'order_item_number', 'asin', 'sku', 'feedback_id', 'signature',
+        }
+        metadata = {key: item for key, item in guarded.items()
+                    if key not in business_fields}
+        text = json.dumps(metadata, ensure_ascii=False)
+    else:
+        text = json.dumps(guarded, ensure_ascii=False)
     lowered = text.lower()
     if any(marker in lowered for marker in _DANGER_MARKERS):
         raise SafetyStop(
@@ -175,6 +210,11 @@ class ZiniaoCliRunner:
         ], timeout=max(60, int(timeout_ms / 1000) + 30))
 
     def page_exec(self, store_id: str, script: str, timeout_ms: int = 30000) -> object:
+        # Windows .cmd launchers can treat literal newlines inside a quoted
+        # argument as command boundaries.  Keep the JavaScript expression
+        # semantically identical but transport it as one line so the bridge
+        # receives the complete script instead of an unterminated prefix.
+        script = str(script).replace('\r', ' ').replace('\n', ' ')
         return self.call([
             'page', 'exec', '--store-id', store_id, '--timeout', str(timeout_ms),
             '--script', script,
@@ -233,7 +273,7 @@ def _read_script(selectors: dict) -> str:
         'feedback_id': selectors.get('feedback_id_selector', ''),
         'order_link': selectors.get('order_link_selector', ''),
         'identity_mode': selectors.get('store_identity_mode', 'page_selector'),
-    }, ensure_ascii=False)
+    }, ensure_ascii=True)
     return f'''/* feedback-read */ JSON.stringify((() => {{
       const cfg = {config};
       const visible = el => {{
@@ -252,11 +292,15 @@ def _read_script(selectors: dict) -> str:
       const label = el => text(el) || shadowText(el)
         || (el?.getAttribute('aria-label') || '').trim()
         || (el?.getAttribute('label') || '').trim();
-      const isNext = value => /^(下一个|下一页|next)/i.test(
-        String(value || '').replace(/\\s+/g, '')
-      );
+      const nextWords = [
+        String.fromCharCode(0x4e0b, 0x4e00, 0x4e2a),
+        String.fromCharCode(0x4e0b, 0x4e00, 0x9875),
+      ];
+      const isNext = value => new RegExp('^(' + nextWords.join('|') + '|next)', 'i')
+        .test(String(value || '').replace(/\\s+/g, ''));
       const markerNodes = cfg.marker ? [...document.querySelectorAll(cfg.marker)] : [];
-      const exactMarkers = markerNodes.filter(el => text(el) === '最新反馈');
+      const latestFeedbackText = String.fromCharCode(0x6700, 0x65b0, 0x53cd, 0x9988);
+      const exactMarkers = markerNodes.filter(el => text(el) === latestFeedbackText);
       const marker = exactMarkers.length === 1 ? exactMarkers[0]
         : (markerNodes.length === 1 ? markerNodes[0] : null);
       const identity = cfg.identity ? text(document.querySelector(cfg.identity)) : '';
@@ -307,16 +351,19 @@ def _click_next_script() -> str:
         const style = getComputedStyle(el); return rect.width > 0 && rect.height > 0
           && style.display !== 'none' && style.visibility !== 'hidden'
           && style.opacity !== '0'; };
-      const text = el => (el.innerText || el.textContent || '').trim();
+      const text = el => (el?.innerText || el?.textContent || '').trim();
       const shadowText = el => text(
         el?.shadowRoot?.querySelector('a,button,[role="button"],span')
       );
       const label = el => text(el) || shadowText(el)
         || (el.getAttribute('aria-label') || '').trim()
         || (el.getAttribute('label') || '').trim();
-      const isNext = value => /^(下一个|下一页|next)/i.test(
-        String(value || '').replace(/\\s+/g, '')
-      );
+      const nextWords = [
+        String.fromCharCode(0x4e0b, 0x4e00, 0x4e2a),
+        String.fromCharCode(0x4e0b, 0x4e00, 0x9875),
+      ];
+      const isNext = value => new RegExp('^(' + nextWords.join('|') + '|next)', 'i')
+        .test(String(value || '').replace(/\\s+/g, ''));
       const nodes = [...document.querySelectorAll(
         'button,a,[role="button"],kat-button,kat-link'
       )].filter(visible).filter(el => isNext(label(el)));
@@ -336,7 +383,7 @@ def _click_order_script(selectors: dict, order_id: str) -> str:
         'order': selectors['order_id_selector'],
         'link': selectors.get('order_link_selector', ''),
         'order_id': order_id,
-    }, ensure_ascii=False)
+    }, ensure_ascii=True)
     return f'''/* feedback-click-order */ JSON.stringify((() => {{
       const cfg = {config};
       const text = el => (el?.innerText || el?.textContent || '').trim();
@@ -378,7 +425,7 @@ def _detail_script(detail: dict) -> str:
         'item': detail['order_item_number_selector'],
         'asin': detail['asin_selector'],
         'sku': detail['sku_selector'],
-    }, ensure_ascii=False)
+    }, ensure_ascii=True)
     return f'''/* feedback-read-detail */ JSON.stringify((() => {{
       const cfg = {config};
       const text = el => (el?.innerText || el?.textContent || '').trim();
@@ -408,8 +455,12 @@ def _detail_script(detail: dict) -> str:
         const value = String(selector || '');
         const element = resolve(value);
         if (!element) return '';
-        const clean = rendered => String(rendered || '')
-          .replace(/^\\s*[:：]\\s*/, '').trim();
+        const clean = rendered => {{
+          let value = String(rendered || '').trim();
+          const colon = String.fromCharCode(0xff1a);
+          if (value.startsWith(':') || value.startsWith(colon)) value = value.slice(1).trim();
+          return value;
+        }};
         if (value.startsWith('text:') || value.startsWith('label:')) {{
           const parent = element.parentElement;
           if (!parent) return '';
@@ -420,8 +471,15 @@ def _detail_script(detail: dict) -> str:
             .join(' ').replace(/\\s+/g, ' '));
         }}
         const rendered = text(element);
-        if (value.startsWith('data-test-id:'))
-          return clean(rendered.replace(/^订单编号：#?\\s*/, ''));
+        if (value.startsWith('data-test-id:')) {{
+          const prefix = String.fromCharCode(
+            0x8ba2, 0x5355, 0x7f16, 0x53f7, 0xff1a
+          );
+          let orderValue = rendered.trim();
+          if (orderValue.startsWith(prefix)) orderValue = orderValue.slice(prefix.length).trim();
+          if (orderValue.startsWith('#')) orderValue = orderValue.slice(1).trim();
+          return clean(orderValue);
+        }}
         return clean(rendered);
       }};
       const marker = resolve(cfg.marker);
@@ -498,16 +556,53 @@ class FeedbackStoreCollector:
             raise SafetyStop('订单详情回读的订单编号与点击目标不一致，停止读取')
         return value
 
-    def _return_to_feedback(self, store_id: str) -> dict:
-        value = self.runner.page_exec(
-            store_id,
-            '''/* feedback-back */ JSON.stringify((() => { history.back(); return {started: true}; })())''',
-            30000,
-        )
-        _guard_page_output(value)
+    def _read_ready_page(self, store_id: str) -> dict:
+        """Bounded retry only for SPA content that has not rendered yet."""
+        for attempt in range(3):
+            try:
+                return self._read_page(store_id)
+            except SafetyStop as exc:
+                if '【最新反馈】区域' not in str(exc) or attempt >= 2:
+                    raise
+                _sleep_random(5.0, 8.0, self.sleep_fn)
+        raise SafetyStop('反馈页面在有界等待后仍未就绪')
+
+    def _read_ready_detail(self, store_id: str, order_id: str) -> dict:
+        """Bounded retry only for a detail page still rendering its marker."""
+        for attempt in range(3):
+            try:
+                return self._read_detail(store_id, order_id)
+            except SafetyStop as exc:
+                if '订单二级页面缺少登记的详情标记' not in str(exc) or attempt >= 2:
+                    raise
+                _sleep_random(5.0, 8.0, self.sleep_fn)
+        raise SafetyStop('订单详情页在有界等待后仍未就绪')
+
+    def _return_to_feedback(self, store_id: str, page_number: int = 1) -> dict:
+        """Reopen Feedback Manager and restore the page containing the row."""
+        url = validate_feedback_manager_url(self.store.get('feedback_manager_url'))
+        self.runner.page_visit(store_id, url)
         self.runner.page_wait_nav(store_id, 30000)
         _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
-        return self._read_page(store_id)
+        payload = self._read_ready_page(store_id)
+        for _ in range(1, max(1, int(page_number))):
+            next_info = payload.get('next') or {}
+            if next_info.get('count') != 1 or next_info.get('disabled'):
+                raise SafetyStop(
+                    '详情返回后无法安全恢复原分页位置，拒绝猜测：'
+                    + json.dumps(next_info, ensure_ascii=False)
+                )
+            clicked = self.runner.page_exec(store_id, _click_next_script(), 30000)
+            _guard_page_output(clicked)
+            if not isinstance(clicked, dict) or clicked.get('clicked') is not True:
+                raise SafetyStop(
+                    '详情返回后恢复分页点击失败：'
+                    + redact_secrets(json.dumps(clicked, ensure_ascii=False)[:1000])
+                )
+            self.runner.page_wait_nav(store_id, 30000)
+            _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+            payload = self._read_ready_page(store_id)
+        return payload
 
     def __call__(self, *, window: dict | None = None) -> dict:
         started = time.monotonic()
@@ -527,7 +622,7 @@ class FeedbackStoreCollector:
             _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
             previous_signature = None
             for page_number in range(1, self.max_pages + 1):
-                payload = self._read_page(store_id)
+                payload = self._read_ready_page(store_id)
                 signature = str(payload.get('signature') or '')
                 if previous_signature is not None and signature == previous_signature:
                     raise SafetyStop('反馈【下一个】点击后页面内容未变化，停止重复读取')
@@ -563,7 +658,7 @@ class FeedbackStoreCollector:
                             _sleep_random(self.detail_wait_min, self.detail_wait_max, self.sleep_fn)
                             in_detail = True
                             try:
-                                detail = self._read_detail(store_id, order_id)
+                                detail = self._read_ready_detail(store_id, order_id)
                                 item.update({
                                     'order_item_number': str(detail.get('order_item_number') or '').strip(),
                                     'asin': str(detail.get('asin') or '').strip(),
@@ -587,7 +682,7 @@ class FeedbackStoreCollector:
                                 # A detail failure may still leave us in the detail page.
                                 # Back-navigation is verified before another row/page action.
                                 if in_detail:
-                                    self._return_to_feedback(store_id)
+                                    self._return_to_feedback(store_id, page_number)
                     page_items.append(item)
                 pages.append({
                     'source_url': url,
@@ -608,6 +703,12 @@ class FeedbackStoreCollector:
                     raise SafetyStop(
                         '反馈页面没有唯一可见的【下一个】按钮，拒绝猜测：'
                         + json.dumps(next_info, ensure_ascii=False)
+                    )
+                if page_number >= self.max_pages:
+                    # Do not click a page beyond the configured safety cap.  A
+                    # bounded probe must stop before causing another navigation.
+                    raise SafetyStop(
+                        f'反馈分页达到安全上限 {self.max_pages} 页，未继续点击'
                     )
                 clicked = self.runner.page_exec(store_id, _click_next_script(), 30000)
                 _guard_page_output(clicked)

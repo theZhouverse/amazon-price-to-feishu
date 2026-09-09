@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 import unittest
 
 from seller_feedback_browser import (FeedbackDataError, FeedbackStoreCollector,
-                                      SafetyStop, _detail_script,
-                                      validate_feedback_manager_url)
+                                      SafetyStop, ZiniaoCliRunner, _detail_script,
+                                      _guard_page_output,
+                                      _click_next_script, validate_feedback_manager_url)
 
 
 def selectors():
@@ -41,6 +43,7 @@ class FakeRunner:
 
     def page_visit(self, store_id, url):
         self.calls.append(('visit', store_id, url))
+        self.page = 0
 
     def page_wait_nav(self, store_id, timeout_ms=30000):
         self.calls.append(('wait-nav', store_id))
@@ -167,6 +170,103 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
             collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
 
+    def test_marker_not_ready_retries_only_with_bounded_wait(self):
+        runner = FakeRunner()
+        original = runner.page_exec
+        reads = {'count': 0}
+
+        def delayed_marker(store_id, script, timeout_ms=30000):
+            value = original(store_id, script, timeout_ms)
+            if 'feedback-read' in script and isinstance(value, dict):
+                reads['count'] += 1
+                if reads['count'] == 1:
+                    value['marker_found'] = False
+            return value
+
+        runner.page_exec = delayed_marker
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        result = collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        # One initial not-ready read, one retry, then reads for each detail
+        # return and the explicit page restoration after the second-page row.
+        self.assertEqual(reads['count'], 8)
+        self.assertEqual(len(result['pages']), 2)
+
+    def test_detail_marker_not_ready_retries_only_with_bounded_wait(self):
+        runner = FakeRunner()
+        original = runner.page_exec
+        detail_reads = {'count': 0}
+
+        def delayed_detail(store_id, script, timeout_ms=30000):
+            value = original(store_id, script, timeout_ms)
+            if 'feedback-read-detail' in script and isinstance(value, dict):
+                detail_reads['count'] += 1
+                if detail_reads['count'] == 1:
+                    value['marker_found'] = False
+            return value
+
+        runner.page_exec = delayed_detail
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        result = collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertEqual(detail_reads['count'], 3)
+        self.assertEqual(result['detail_complete'], 2)
+
+    def test_page_cap_stops_before_clicking_next(self):
+        runner = FakeRunner()
+        collector = FeedbackStoreCollector(
+            self.store(), runner, max_pages=1, page_wait_min=1,
+            page_wait_max=1, detail_wait_min=1, detail_wait_max=1,
+            sleep_fn=lambda _: None,
+        )
+        with self.assertRaises(SafetyStop):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertFalse(any(call[0] == 'exec' and call[1] == '/* feedback-click-next'
+                             for call in runner.calls))
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_cli_page_exec_compacts_multiline_script_for_cmd_transport(self):
+        captured = {}
+
+        def run_fn(args, **kwargs):
+            captured['args'] = args
+            return type('Completed', (), {
+                'returncode': 0,
+                'stdout': '{"result":"{\\"ok\\":true}"}',
+                'stderr': '',
+            })()
+
+        runner = ZiniaoCliRunner(
+            cli_path=Path(__file__), run_fn=run_fn,
+        )
+        result = runner.page_exec('store-a', 'const x = 1;\nreturn x;', 30000)
+        self.assertEqual(result, {'ok': True})
+        self.assertNotIn('\n', captured['args'][-1])
+        self.assertIn('const x = 1; return x;', captured['args'][-1])
+
+    def test_guard_ignores_cli_notice_but_blocks_risk_in_page_result(self):
+        _guard_page_output({
+            'data': {'data': {'result': '{"ok":true,"text":"normal"}'},
+                     '_notice': {'message': 'sign in is not a page result'}},
+        })
+        with self.assertRaises(SafetyStop):
+            _guard_page_output({
+                'data': {'data': {'result': '{"ok":true,"text":"captcha"}'},
+                         '_notice': {'message': 'normal update notice'}},
+            })
+
+    def test_guard_does_not_scan_feedback_comment_as_page_risk(self):
+        _guard_page_output({
+            'ok': True,
+            'marker_found': True,
+            'rows': [{'content': 'The customer could not login to the account'}],
+            'signature': 'F1 login customer text',
+        })
+
     def test_detail_script_accepts_verified_label_selector_forms(self):
         script = _detail_script({
             'marker': 'text:订单内容',
@@ -175,10 +275,15 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
             'asin_selector': 'label:ASIN',
             'sku_selector': 'label:SKU',
         })
-        self.assertIn('text:订单内容', script)
+        self.assertIn(r'text:\u8ba2\u5355\u5185\u5bb9', script)
         self.assertIn('data-test-id:order-id-label', script)
-        self.assertIn('label:订单商品编号', script)
+        self.assertIn(r'label:\u8ba2\u5355\u5546\u54c1\u7f16\u53f7', script)
         self.assertIn('startsWith', script)
+
+    def test_next_script_reads_missing_shadow_content_safely(self):
+        script = _click_next_script()
+        self.assertIn("el?.innerText", script)
+        self.assertIn("el?.textContent", script)
 
 
 if __name__ == '__main__':
