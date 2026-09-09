@@ -248,7 +248,7 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 
 前端检查和价格解析使用同一次商品页面导航、同一ASIN身份门禁和同一邮编/站点上下文。检查不得通过另一次无预算导航绕过价格任务的节奏与风控限制；检查脚本只读取已加载页面及其可见DOM/结构化数据。历史本地HTML可先用于构造离线样本和选择器匹配，生产结果必须来自当次实时页面。检查结果不覆盖H:M价格/币种字段，也不把检查失败重新分类为价格成功。
 
-- 商品主图：当前商品主图区域须存在有效图片来源并能在页面DOM中确认。明确缺失为`fail`，页面不可用或身份门禁失败为`unknown`。该项只判断主图存在，不判断图片内容是否与周报一致。
+- 商品主图：当前商品主图区域（优先`#imageBlock_feature_div`及其`#landingImage`/主图节点）须存在有效图片来源，并且该图片节点能在当前商品DOM中确认、未被隐藏/推荐/其他商品上下文门禁排除。规则不把图片CSS宽高作为独立通过条件；明确缺失为`fail`，页面不可用或身份门禁失败为`unknown`。该项只判断主图存在，不判断图片内容是否与周报一致。
 - From the brand品牌故事图片：只接受当前商品A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块；该模块必须有精确的标题`From the brand`，并且同一模块内至少有一个有效图片项。模块为空、只出现泛化品牌文案、标题缺失或图片缺失均为`fail`；页面不可用或身份门禁失败为`unknown`。观察值必须分别记录`heading`和`image`，不再与N列主图合并。
 - 尺寸一致性：读取当前选中变体或购买区展示尺寸，统一大小写、空格、乘号、单位和英制/公制书写后与周报预期尺寸比较。只有存在明确预期值且页面明确选中同一变体才可`pass`；缺少预期、未选中变体或多个尺寸无法确定时为`unknown`。
 - 页面商品身份：在单项字段检查前，优先读取主商品`#title_feature_div[data-csa-c-asin]`，旧布局再回退到`#ASIN[value]`；若该页面主商品ASIN或页面URL中的ASIN与请求ASIN不一致，N:T全部为`unknown`并显示`-`，不得从页面中其他商品模块拼接部分结果。
@@ -256,9 +256,9 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 - Amazon's Choice：只检查当前ASIN对应的`#acBadge_feature_div`，该容器或其祖先的`data-csa-c-asin`/`data-asin`必须包含当前请求ASIN，并且其可见后代节点必须有规范化后精确等于`Amazon's Choice`的实际badge文本。`a-popover-preload`、`aria-hidden=true`、`aok-hidden`、`aok-offscreen`及其他隐藏说明文本不计入；空占位容器、ASIN不一致的变体、导航、推荐商品或其他ASIN区域不计入。
 - BSR与Amazon's Choice的“唯一性”首先要求各自只能归属于当前ASIN；另外业务上二者互斥：同一当前ASIN同时存在BSR和AC时，判定该ASIN不合法，`bsr_badge`和`amazon_choice_badge`均输出`fail`，保留各自的观察值和冲突原因，不得输出两个`pass`。页面身份门禁失败时七项统一为`unknown`并显示`-`。
 - 父子ASIN发散：只读取`#inline-twister-expander-content-*`变体区域下面的`li.inline-twister-swatch[data-asin]`，从这些子体节点提取ASIN并排除当前请求ASIN。至少还有一个不同ASIN为`pass`；变体区域存在但没有不同ASIN为`fail`；变体区域无法确认时为`unknown`。`#twisterPlusPriceSubtotalWWDesktop_feature_div`只属于价格汇总，不再作为父子ASIN证据。
-- 环保标志：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`的`data-csa-c-asin`必须与当前页面ASIN一致，并且其后代同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
+- 环保标志：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`必须存在非空的`data-csa-c-asin`且其值必须与当前页面ASIN一致；缺失或不一致均不得通过。该模块后代还必须同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
 
-所有检查均保留`observed`、`status`、`reason`和`evidence_locator`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将主图与`From the brand`品牌故事图片拆为N/O两列，并要求品牌故事模块精确标题+同模块图片，规则版本升级为`2026-09-09-v8`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
+所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将主图与`From the brand`品牌故事图片拆为N/O两列，要求品牌故事模块精确标题+同模块图片，并要求环保模块显式绑定当前ASIN，规则版本升级为`2026-09-09-v9`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
 
 ### 6.2 后台Feedback来源和筛选
 

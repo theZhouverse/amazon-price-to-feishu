@@ -15,7 +15,7 @@ from collections import Counter
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-09-v8'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-09-v9'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -57,21 +57,36 @@ _NON_PRODUCT_CONTEXT_RE = re.compile(
     r'a-text-price|review|customer.*question|ask-btf|sns-|subscribe', re.I)
 
 
-def _unknown(reason: str, *, page_url: str = '') -> dict:
+def _unknown(reason: str, *, page_url: str = '', captured_at: str = '') -> dict:
     return {
         'observed': '',
         'status': 'unknown',
         'reason': reason,
         'evidence_locator': '',
         'page_url': page_url,
-        'captured_at': '',
+        'captured_at': captured_at,
         'rule_version': FRONTEND_CHECK_RULE_VERSION,
     }
 
 
-def unknown_checks(reason: str = '页面证据不可用', *, page_url: str = '') -> dict[str, dict]:
+def unknown_checks(reason: str = '页面证据不可用', *, page_url: str = '',
+                   captured_at: str = '') -> dict[str, dict]:
     """Return all seven columns as explicit unknown values."""
-    return {key: _unknown(reason, page_url=page_url) for key in CHECK_KEYS}
+    return {
+        key: _unknown(reason, page_url=page_url, captured_at=captured_at)
+        for key in CHECK_KEYS
+    }
+
+
+def stamp_frontend_checks(checks: dict | None, captured_at: str) -> dict:
+    """Attach one DOM-capture timestamp to every existing check evidence item."""
+    captured_at = str(captured_at or '').strip()
+    if not captured_at:
+        return checks or {}
+    for evidence in (checks or {}).values():
+        if isinstance(evidence, dict):
+            evidence['captured_at'] = captured_at
+    return checks or {}
 
 
 def _text(node) -> str:
@@ -502,8 +517,12 @@ def _product_eco(raw_nodes: list, asin: str = '') -> tuple[bool, str, str]:
         if ident != 'climatepledgefriendlyatf_feature_div':
             continue
         attrs = getattr(node, 'attrs', {})
-        module_asin = str(attrs.get('data-csa-c-asin') or '').upper()
-        if asin and module_asin and module_asin != str(asin).upper():
+        module_asin = str(attrs.get('data-csa-c-asin') or '').upper().strip()
+        expected_asin = str(asin or '').upper().strip()
+        # The product-level module must explicitly bind itself to the current
+        # requested ASIN. A missing binding is not safe evidence because the
+        # same page can contain other product cards and recommendation modules.
+        if not expected_asin or not module_asin or module_asin != expected_asin:
             continue
         descendants = list(_walk_descendants(node))
         badge = next((child for child in descendants
@@ -572,15 +591,17 @@ def _result(key: str, observed: str, status: str, reason: str, locator: str,
 
 def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
                      page_ready: bool = True, page_status: str = 'ok',
-                     page_url: str = '') -> dict[str, dict]:
+                     page_url: str = '', captured_at: str = '') -> dict[str, dict]:
     """Inspect all seven checks from one already-loaded DOM snapshot."""
     if not page_ready or page_status in _GATE_STATUSES:
         return unknown_checks(
-            f'页面门禁: {page_status or "页面不可用"}', page_url=page_url)
+            f'页面门禁: {page_status or "页面不可用"}', page_url=page_url,
+            captured_at=captured_at)
     tree, raw_nodes = _raw_tree_nodes(html)
     nodes = _nodes(tree)
     if not nodes:
-        return unknown_checks('DOM为空或未加载完成', page_url=page_url)
+        return unknown_checks('DOM为空或未加载完成', page_url=page_url,
+                              captured_at=captured_at)
 
     requested_asin = str(asin or '').upper().strip()
     page_asin = _page_product_asin(raw_nodes)
@@ -588,11 +609,11 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     if requested_asin and page_asin and page_asin != requested_asin:
         return unknown_checks(
             f'页面主商品 ASIN 与请求 ASIN 不一致: 请求 {requested_asin}，页面 {page_asin}',
-            page_url=page_url)
+            page_url=page_url, captured_at=captured_at)
     if requested_asin and url_asin and url_asin != requested_asin:
         return unknown_checks(
             f'页面URL ASIN 与请求 ASIN 不一致: 请求 {requested_asin}，URL {url_asin}',
-            page_url=page_url)
+            page_url=page_url, captured_at=captured_at)
 
     main_image, main_locator = _direct_or_region_image(nodes)
     brand_image, brand_locator, brand_observed = _brand_story(nodes)
@@ -635,7 +656,7 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
         'size_consistent', observed or '', size_status, size_reason, size_locator, page_url)
     size_result['expected'] = expected
 
-    return {
+    results = {
         'product_image': _result(
             'product_image', str(main_image).lower(),
             'pass' if main_image else 'fail',
@@ -666,6 +687,7 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
             choice_status, choice_reason,
             choice_locator, page_url),
     }
+    return stamp_frontend_checks(results, captured_at)
 
 
 def frontend_status_values(checks: dict | None, *, page_status: str = 'ok') -> list[str]:

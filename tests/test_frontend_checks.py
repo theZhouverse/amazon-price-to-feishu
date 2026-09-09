@@ -28,7 +28,7 @@ class FrontendChecksTest(unittest.TestCase):
         <div id="prodDetails" data-csa-c-asin="B000000001"><table class="prodDetTable"><tr>
           <th class="prodDetSectionEntry">Best Sellers Rank</th><td>#1 in Patio</td>
         </tr></table></div>
-        <div id="climatePledgeFriendlyATF_feature_div">
+        <div id="climatePledgeFriendlyATF_feature_div" data-csa-c-asin="B000000001">
           <div id="climatePledgeFriendlyBadge">
             <span id="CPF-ATF-Card">
               <a class="climatePledgeFriendlyATF"><img src="eco.svg"></a>
@@ -51,6 +51,15 @@ class FrontendChecksTest(unittest.TestCase):
         self.assertEqual(checks['size_consistent']['expected'], '8x10 ft')
         self.assertNotEqual(checks['product_image']['evidence_locator'], '')
         self.assertNotEqual(checks['brand_story_image']['evidence_locator'], '')
+
+    def test_capture_timestamp_is_retained_for_all_checks(self):
+        checks = inspect_frontend(
+            '<div id="imageBlock_feature_div"><img src="main.jpg"></div>',
+            '', 'B000000001', captured_at='2026-09-09 12:34:56')
+        self.assertEqual(
+            {item['captured_at'] for item in checks.values()},
+            {'2026-09-09 12:34:56'},
+        )
 
     def test_product_image_and_brand_story_image_are_separate(self):
         checks = inspect_frontend(
@@ -135,6 +144,16 @@ class FrontendChecksTest(unittest.TestCase):
             '<a class="climatePledgeFriendlyATF"><img src="leaf.svg"></a>'
             '<span class="climatePledgeFriendlyProgramName">1 sustainability feature</span>'
             '</span></div></div></div></div>',
+            '8x10', 'B000000001')
+        self.assertEqual(checks['eco_badge']['status'], 'fail')
+
+    def test_eco_badge_requires_explicit_current_asin_binding(self):
+        checks = inspect_frontend(
+            '<div id="climatePledgeFriendlyATF_feature_div">'
+            '<div id="climatePledgeFriendlyBadge"><span id="CPF-ATF-Card">'
+            '<a class="climatePledgeFriendlyATF"><img src="leaf.svg"></a>'
+            '<span class="climatePledgeFriendlyProgramName">1 sustainability feature</span>'
+            '</span></div></div>',
             '8x10', 'B000000001')
         self.assertEqual(checks['eco_badge']['status'], 'fail')
 

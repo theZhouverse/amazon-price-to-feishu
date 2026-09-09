@@ -10,7 +10,7 @@
 
 - 用户确认品牌故事定位为页面中的精确标题`From the brand`；结果表不再把商品主图和品牌故事图片合并到同一列。当前开发副本目标布局为A:V：N商品主图、O`From the brand`品牌故事图片、P尺寸、Q BSR、R父子ASIN、S环保、T Amazon's Choice、U时间戳、V Amazon链接。
 - O列只有在当前页面通过ASIN身份门禁、A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块存在精确标题`From the brand`且同一模块内有有效图片时才为`✅`；N列只判断当前商品主图。两列分别保留`heading`/`image`证据，缺哪一个会在本地诊断中明确显示。
-- 本地规则版本已升级为`2026-09-09-v8`，离线定向测试覆盖“主图通过但品牌故事图片缺失”“品牌故事图片存在但标题缺失”两种拆分反例；真实固定结果表A:V迁移/回读仍未执行，生产表不能据此视为已发布。
+- 本地规则版本已升级为`2026-09-09-v9`：环保标志要求商品级 ATF 模块存在非空且匹配当前请求 ASIN 的`data-csa-c-asin`，缺失或不一致不得通过；七项检查统一保留同一次 DOM 快照的`captured_at`。离线定向测试覆盖“主图通过但品牌故事图片缺失”“品牌故事图片存在但标题缺失”“环保模块缺少当前 ASIN 绑定”等拆分反例；真实固定结果表A:V迁移/回读仍未执行，生产表不能据此视为已发布。
 
 ## 2026-09-09 Feedback核心与页面适配边界
 
@@ -40,7 +40,7 @@
 ## 2026-09-08 新增前端检查与Feedback范围（本地核心已实现，外部验收未完成）
 
 - 开发副本已增加同页七项前端检查、证据字段和A:V发布/迁移逻辑；当前目标顺序为H:M价格/币种、N:T前端勾叉、U/V时间戳/链接。固定结果表的真实表头、旧A:P/A:O迁移、整行回读和历史bundle兼容尚未在线验收。在完成这些门禁前，生产目录仍按A:O价格基线，不得向云端写入新增N:T。
-- 七项检查中只有尺寸需要周报预期字段；N列主图与O列`From the brand`品牌故事图片独立判断；BSR、环保标志和Amazon's Choice按当前商品页面存在性提取，但业务规则要求同一ASIN不能同时有BSR和Amazon's Choice；如果两者同时存在，Q/T均为`fail`并记录“ASIN不合法”。新增主商品`#title_feature_div[data-csa-c-asin]`身份门禁；`B0G5Y2TJQM`历史文件的页面内部ASIN锚点指向`B0GZZH77J1`，其叶子图标实际属于推荐卡`B09S3RCVJ5`，因此该文件正式应整页`unknown`，不能拿其他商品的环保标或BSR。`B0BNDLPW1L`原始HTML的`#acBadge_feature_div`和详情表确实带当前ASIN，且存在可见`mvt-ac-badge-rectangle`与BSR行；按新业务规则，这种同时存在的组合不再输出两个通过，而是两列均失败并保留冲突证据。环保标志进一步收紧为当前ASIN对应的完整`#climatePledgeFriendlyATF_feature_div`→`#climatePledgeFriendlyBadge`→`#CPF-ATF-Card`→同卡叶子图标+`.climatePledgeFriendlyProgramName`链，空的BTF/A+占位、推荐轮播和泛化文案不再计入；旧父子ASIN规则可能把价格汇总容器当变体区域，已改为读取`#inline-twister-expander-content-*`下的swatch ASIN。历史本地HTML仅用于选择器和离线样本匹配，不直接生成当前结果。实时US/CA复核和真实固定表回读仍未完成。
+- 七项检查中只有尺寸需要周报预期字段；N列主图与O列`From the brand`品牌故事图片独立判断；BSR、环保标志和Amazon's Choice按当前商品页面存在性提取，但业务规则要求同一ASIN不能同时有BSR和Amazon's Choice；如果两者同时存在，Q/T均为`fail`并记录“ASIN不合法”。新增主商品`#title_feature_div[data-csa-c-asin]`身份门禁；`B0G5Y2TJQM`历史文件的页面内部ASIN锚点指向`B0GZZH77J1`，其叶子图标实际属于推荐卡`B09S3RCVJ5`，因此该文件正式应整页`unknown`，不能拿其他商品的环保标或BSR。`B0BNDLPW1L`原始HTML的`#acBadge_feature_div`和详情表确实带当前ASIN，且存在可见`mvt-ac-badge-rectangle`与BSR行；按新业务规则，这种同时存在的组合不再输出两个通过，而是两列均失败并保留冲突证据。环保标志进一步收紧为当前ASIN对应的完整`#climatePledgeFriendlyATF_feature_div[data-csa-c-asin]`→`#climatePledgeFriendlyBadge`→`#CPF-ATF-Card`→同卡叶子图标+`.climatePledgeFriendlyProgramName`链，模块 ASIN 缺失或不一致均不计入；空的BTF/A+占位、推荐轮播和泛化文案不再计入；旧父子ASIN规则可能把价格汇总容器当变体区域，已改为读取`#inline-twister-expander-content-*`下的swatch ASIN。历史本地HTML仅用于选择器和离线样本匹配，不直接生成当前结果。实时US/CA复核和真实固定表回读仍未完成。
 - 两个店铺Seller Central Feedback管理器的店铺标识、登录/凭证注入方式和固定Feedback子表Sheet ID尚未完成当前环境验收；在凭证、权限、分页和幂等键验证前，不得把商品Review或Q&A当作Feedback来源。
 - 前端检查已增加离线替身及bundle/summary/通知统计；Feedback已增加分页、低星、幂等合并、固定Sheet矩阵和脱敏证据替身，但两个店铺Seller Central会话/凭证引用/固定Sheet ID仍未完成当前环境验收。真实最小批之前，生产价格任务仍按A:O流程和HTML关闭边界运行。
 
