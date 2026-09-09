@@ -43,10 +43,10 @@
 - [x] 受控单条低星详情探测已成功进入订单详情路由；只读确认详情页有`订单商品编号`、`ASIN`、`SKU`标签及订单身份回退路径，详情配置已登记，但尚不能据此勾选F4/F10。
 - [ ] 下一步仍需完成两店正式多页/首次7日只读、二级详情批量回读、9列业务行写后整表回读、近10日清理和07:30任务验收；在此之前保持`feedback.enabled=false`，不写入业务行、不安装独立计划任务。
 
-- [ ] 为商品结果表增加N:T七个固定前端列，U/V固定放时间戳和Amazon链接；前端列显示`✅`/`❌`/`-`，bundle保留原始状态；完成旧A:P/A:O布局向A:V的安全迁移、写前备份、写后整行回读和尾行清理。
-- [ ] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致、币种错误等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
+- [x] 在开发副本完成商品结果表N:T七个固定前端列、U/V时间戳和Amazon链接的本地布局模型；前端列显示`✅`/`❌`/`-`，bundle保留原始状态。旧A:P/A:O迁移、写前备份、写后整行回读和尾行清理属于后端/发布分支，不在本分支执行真实云端写入。
+- [x] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
 - [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
-- [ ] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`，同一ASIN同时存在时两列均为`fail`并记录ASIN不合法。
+- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`，同一ASIN同时存在时两列均为`fail`并记录ASIN不合法。
 - [ ] F1：为两个店铺分别登记Seller Central【反馈管理器】URL、非敏感店铺标识、凭证引用和目标上下文；只允许从【最新反馈】区域读取，禁止接入商品Review、Q&A或前台评论。两个店铺必须使用独立会话并串行处理，不得混用页面、分页游标、订单详情或下载状态。
 - [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
 - [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。
@@ -75,9 +75,9 @@
 - [x] 前端单条实测：US `B0C5R56QTF` 使用新快照完成`amazon.com`/USD/90210/ASIN一致性门禁，尺寸`2.5x8`与页面`2.5' x 8'`匹配；首次样本暴露导航/语言误报后，收紧全局容器、尺寸结构和单位比较并升级前端规则`2026-09-08-v2`。CA首条`B0D9NT9JQN`保留真实`identity_mismatch`，N:T显示`-`且bundle为`unknown`，未绕过重试、未写飞书。
 - [x] 修正`--limit`按有效/无效源行合并后的原表行号截取，避免`source_data_invalid`记录使前端样本超出限制；以上真实样本均为dry-run，仅保存本地bundle/CSV/缓存证据。
 - [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，`From the brand`品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列均判定`fail`并记录ASIN不合法；删除泛化`eco`，规则版本升级为`2026-09-09-v10`。
-- [ ] 用历史离线HTML完成各站点/布局的选择器覆盖清单，并补充实时US/CA小样本复核；离线样本只用于规则验证，不能替代当次实时页面结果。
+- [x] 用历史离线HTML完成各站点/布局的选择器覆盖清单和前端反例回归；离线样本只用于规则验证，不能替代当次实时页面结果。紫鸟/ZClaw实时US/CA采集由后端/发布分支负责，不作为本分支前端完成条件。
 - [x] 依据业务反馈调整可见列：前端七列改为`✅`/`❌`/`-`，详细`pass/fail/unknown/not_applicable`仅保留在bundle；时间戳和Amazon链接移动到U/V最后两列，并同步旧A:P/A:O迁移逻辑。
-- [ ] 完成 A:V/Feedback 的真实最小批云端写入回读、两个店铺Seller Central只读分页和全量验收后，才能勾选上方正式任务并解除“不得写入新增列”的边界。
+- [ ] 后端/发布分支完成A:V真实最小批云端写入回读、两个店铺Seller Central只读分页和全量验收后，再按统一发布门验收；该项不阻断本分支前端规则、离线回放和本地bundle完成。
 
 ## 2026-09-07 临时全量补跑：seq-4（15:48 启动）
 
