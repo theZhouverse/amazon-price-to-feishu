@@ -81,7 +81,7 @@ class FakeRunner:
                 'signature': 'page-2',
                 'rows': [{'feedback_id': 'F-2', 'feedback_date': '2026-09-08',
                           'rating': '2 stars', 'order_id': 'ORDER-2', 'content': 'bad 2'}],
-                'next': {'count': 0, 'disabled': False},
+                'next': {'count': 1, 'disabled': True},
             }
         raise AssertionError('unexpected fake script')
 

@@ -265,7 +265,7 @@ def _read_script(selectors: dict) -> str:
         if (direct) return direct;
         const href = el?.getAttribute('href')
           || el?.shadowRoot?.querySelector('a[href]')?.getAttribute('href') || '';
-        const match = String(href).match(/\/orders-v3\/order\/([^/?#]+)/);
+        const match = String(href).match(new RegExp('/orders-v3/order/([^/?#]+)'));
         return match ? decodeURIComponent(match[1]) : '';
       }};
       const nodes = [...document.querySelectorAll(cfg.row)].filter(visible);
@@ -302,7 +302,7 @@ def _read_script(selectors: dict) -> str:
 
 
 def _click_next_script() -> str:
-    return '''/* feedback-click-next */ JSON.stringify((() => {
+    return r'''/* feedback-click-next */ JSON.stringify((() => {
       const visible = el => { const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el); return rect.width > 0 && rect.height > 0
           && style.display !== 'none' && style.visibility !== 'hidden'
@@ -345,7 +345,7 @@ def _click_order_script(selectors: dict, order_id: str) -> str:
         if (direct) return direct;
         const href = el?.getAttribute('href')
           || el?.shadowRoot?.querySelector('a[href]')?.getAttribute('href') || '';
-        const match = String(href).match(/\/orders-v3\/order\/([^/?#]+)/);
+        const match = String(href).match(new RegExp('/orders-v3/order/([^/?#]+)'));
         return match ? decodeURIComponent(match[1]) : '';
       }};
       const visible = el => {{ const rect = el.getBoundingClientRect();
@@ -425,7 +425,7 @@ def _detail_script(detail: dict) -> str:
         return clean(rendered);
       }};
       const marker = resolve(cfg.marker);
-      const route = location.href.match(/\\/orders-v3\\/order\\/([^/?#]+)/);
+      const route = location.pathname.match(new RegExp('/orders-v3/order/([^/?#]+)'));
       const routeOrderId = route ? decodeURIComponent(route[1]) : '';
       const orderId = labeledValue(cfg.order) || routeOrderId;
       return {{ ok: true, marker_found: Boolean(marker),

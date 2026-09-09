@@ -33,6 +33,7 @@
 
 ### 最新开发/只读验收进度（2026-09-09）
 
+- [x] 固定 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 已创建唯一子表 `Feedback差评汇总`，Sheet ID `41u25y` 已登记到 `config/config.json`；`A1:I1` 回读与严格9列表头完全匹配。本次业务数据写入数为0，模块仍保持禁用。
 - [x] 两个店铺都完成单条低星详情只读复核：详情标记、订单路由身份、订单商品编号、ASIN、SKU均可回读；无登录、验证码或风控信号，且每个店铺完成后关闭上下文。
 - [x] 详情选择器登记为`text:订单内容`、`data-test-id:order-id-label`、`label:订单商品编号`、`label:ASIN`、`label:SKU`；标签值去除展示冒号，订单号支持详情路由回退并继续做身份比对。
 - [x] 真实页面确认分页控件是唯一可见`kat-link`文本`下一个 >`，内部链接位于Shadow DOM；代码按前缀识别并在“有数据但无分页控件”时fail-close，新增离线回归覆盖该阻断。
@@ -40,7 +41,7 @@
 - [x] 两店已分别打开Seller Central并到达准确地址`https://sellercentral.amazon.com/feedback-manager/index.html`；两店都确认【最新反馈】、固定5列表头和20条当前页数据，未出现登录、验证码或风控信号。基础`/feedback-manager`空壳地址已列为不可用来源。
 - [x] 已登记主表真实选择器并适配Amazon KAT组件：星级从`kat-star-rating[value]`读取，订单号从`kat-link`及其Shadow DOM链接读取，点击目标使用唯一订单链接；代码改用`domcontentloaded`加有界等待，避免Feedback SPA的`networkidle`不收口。
 - [x] 受控单条低星详情探测已成功进入订单详情路由；只读确认详情页有`订单商品编号`、`ASIN`、`SKU`标签及订单身份回退路径，详情配置已登记，但尚不能据此勾选F4/F10。
-- [ ] 下一步仍需完成固定`Feedback差评汇总` Sheet ID核对、两店正式多页/首次7日只读、二级详情批量回读、9列写后回读、近10日清理和07:30任务验收；在此之前保持`feedback.enabled=false`，不写入飞书、不安装独立计划任务。
+- [ ] 下一步仍需完成两店正式多页/首次7日只读、二级详情批量回读、9列业务行写后整表回读、近10日清理和07:30任务验收；在此之前保持`feedback.enabled=false`，不写入业务行、不安装独立计划任务。
 
 - [ ] 为商品结果表增加N:T七个固定前端列，U/V固定放时间戳和Amazon链接；前端列显示`✅`/`❌`/`-`，bundle保留原始状态；完成旧A:P/A:O布局向A:V的安全迁移、写前备份、写后整行回读和尾行清理。
 - [ ] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致、币种错误等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
