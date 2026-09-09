@@ -107,6 +107,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument('--dry-run', action='store_true', help='只读+计算+本地输出，不改飞书')
     ap.add_argument('--resume', action='store_true', help='恢复最近有效的未完成批次')
     ap.add_argument('--run-id', default=None, help='明确恢复指定批次(排错用)')
+    ap.add_argument('--scheduled-slot', default='manual',
+                    choices=('manual', 'monday_0730', 'monday_1530',
+                             'weekday_0730', 'weekday_1530'),
+                    help='调度计划槽位；补跑仍按原槽位选择来源，人工运行使用 manual')
     ap.add_argument('--force-push', action='store_true', help='异常比例超阈值时仍写入飞书')
     ap.add_argument('--inspect-feishu-layout', action='store_true',
                     help='只读预检目标表布局(表头行/ASIN起始行/旧列/J:O)')
@@ -1154,6 +1158,113 @@ def _notify_run_collaborators(fc, cfg, logger, run_id, text, out,
                           local_data_open_id=cfg.get('feishu_manager_open_id', ''))
 
 
+def _feedback_report_base(status: str, *, reason: str = '') -> dict:
+    report = {
+        'feedback_status': status,
+        'feedback_rows_seen': 0,
+        'feedback_rows_eligible': 0,
+        'feedback_rows_detail_complete': 0,
+        'feedback_rows_written': 0,
+        'feedback_rows_expired_deleted': 0,
+        'feedback_rows_invalid_date_dropped': 0,
+        'feedback_store_status': {},
+        'feedback_store_elapsed_seconds': {},
+        'feedback_window_type': '',
+        'feedback_sheet_readback': {'status': 'not_configured'},
+        'feedback_elapsed_seconds': 0.0,
+    }
+    if reason:
+        report['feedback_error'] = str(reason)[:1000]
+    return report
+
+
+def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> dict:
+    """Run independent Feedback collection only in the weekday 07:30 slot."""
+    feedback_cfg = cfg.get('feedback') or {}
+    slot = getattr(args, 'scheduled_slot', 'manual') or 'manual'
+    if slot not in ('monday_0730', 'weekday_0730'):
+        return _feedback_report_base('skipped_schedule', reason=f'仅07:30槽位运行，当前={slot}')
+    if not feedback_cfg.get('enabled'):
+        return _feedback_report_base('not_configured', reason='feedback.enabled=false')
+
+    started = time.monotonic()
+    evidence_base = Path(str(feedback_cfg.get('evidence_root') or OUTPUT_DIR / 'feedback'))
+    if not evidence_base.is_absolute():
+        evidence_base = PROJECT_ROOT / evidence_base
+    evidence_root = evidence_base / run_id
+    state_path = Path(str(feedback_cfg.get('state_path') or evidence_base / 'feedback_state.json'))
+    if not state_path.is_absolute():
+        state_path = PROJECT_ROOT / state_path
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    try:
+        from seller_feedback import run_feedback_pipeline
+        from seller_feedback_browser import build_feedback_collectors
+        collectors = build_feedback_collectors(feedback_cfg)
+        should_write = not args.dry_run and not args.fetch_only
+        raw = run_feedback_pipeline(
+            fc=fc,
+            run_id=run_id,
+            collectors=collectors,
+            evidence_dir=evidence_root,
+            state_path=state_path,
+            spreadsheet_token=str(feedback_cfg.get('target_spreadsheet_token') or ''),
+            sheet_id=str(feedback_cfg.get('target_sheet_id') or ''),
+            initial_days=int(feedback_cfg.get('initial_window_days', 7)),
+            incremental_days=int(feedback_cfg.get('incremental_window_days', 3)),
+            retention_days=int(feedback_cfg.get('retention_days', 10)),
+            max_rating=int(feedback_cfg.get('max_rating', 3)),
+            store_order=feedback_cfg.get('store_order') or ('store_a', 'store_b'),
+            write=should_write,
+        )
+        sheet = raw.get('sheet') or {}
+        result = _feedback_report_base(raw.get('status') or 'blocked')
+        result.update({
+            'feedback_rows_seen': raw.get('feedback_rows_seen', 0),
+            'feedback_rows_eligible': raw.get('feedback_rows_eligible', 0),
+            'feedback_rows_detail_complete': raw.get('feedback_rows_detail_complete', 0),
+            'feedback_rows_written': raw.get('feedback_rows_written', 0),
+            'feedback_rows_expired_deleted': sheet.get('feedback_rows_expired_deleted', 0),
+            'feedback_rows_invalid_date_dropped': sheet.get('feedback_rows_invalid_date_dropped', 0),
+            'feedback_store_status': {
+                key: item.get('status') for key, item in (raw.get('stores') or {}).items()
+            },
+            'feedback_store_elapsed_seconds': {
+                key: item.get('elapsed_seconds', 0.0)
+                for key, item in (raw.get('stores') or {}).items()
+            },
+            'feedback_window_type': (raw.get('window') or {}).get('mode', ''),
+            'feedback_sheet_readback': sheet.get('readback') or {'status': sheet.get('status')},
+            'feedback_window': raw.get('window') or {},
+            'feedback_state_advanced': bool(raw.get('state_advanced')),
+            'feedback_elapsed_seconds': raw.get('elapsed_seconds', 0.0),
+            'feedback_evidence_root': str(evidence_root),
+        })
+        p(logger, '[Feedback] status=' + str(result['feedback_status'])
+          + ' stores=' + json.dumps(result['feedback_store_status'], ensure_ascii=False)
+          + ' rows_seen=' + str(result['feedback_rows_seen'])
+          + ' rows_written=' + str(result['feedback_rows_written'])
+          + ' elapsed=' + str(result['feedback_elapsed_seconds']) + 's')
+        return result
+    except Exception as exc:
+        elapsed = round(time.monotonic() - started, 3)
+        result = _feedback_report_base(
+            'auth_error' if any(term in str(exc).lower()
+                                for term in ('auth', 'login', 'cookie', 'signin', '验证码'))
+            else 'blocked',
+            reason=f'{type(exc).__name__}: {exc}',
+        )
+        result.update({
+            'feedback_elapsed_seconds': elapsed,
+            'feedback_evidence_root': str(evidence_root),
+        })
+        p(logger, '[Feedback] 已停止：' + json.dumps({
+            'status': result['feedback_status'],
+            'error': result.get('feedback_error', ''),
+            'elapsed_seconds': elapsed,
+        }, ensure_ascii=False))
+        return result
+
+
 def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logger) -> None:
     """Price-only daily flow; HTML services are never a prerequisite."""
     from datetime import timedelta, timezone
@@ -1226,6 +1337,10 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     results_by_sheet = {}
     out = OUTPUT_DIR / 'daily_runs' / datetime.now().strftime('%Y-%m-%d')
     bundle_path = out / f'{run_id}_weekly_bundle.json'
+    # Intermediate price checkpoints are written before the independent
+    # Feedback stage; keep the interim state explicit rather than calling it a
+    # successful Feedback result.
+    feedback_report = _feedback_report_base('not_configured')
     def save_bundle():
         atomic_json(bundle_path, {
             'schema_version': 2, 'run_id': run_id, 'period_id': selection.period_id,
@@ -1234,6 +1349,7 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
             'source_fingerprints': fingerprints,
             'snapshot_spreadsheet_token': manifest['snapshot']['spreadsheet_token'],
             'result_spreadsheet_token': manifest['result']['spreadsheet_token'],
+            **feedback_report,
             'created_at': datetime.now().isoformat(),
             'sheets': {s: [cr.as_dict() for cr in values] for s, values in results_by_sheet.items()},
         })
@@ -1271,6 +1387,10 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not args.asins and not args.limit:
         for item in selected:
             results_by_sheet.setdefault(item['result_sheet'], [])
+    feedback_report = _run_feedback_stage(fc, cfg, run_id, args, logger, out)
+    manifest['feedback_report'] = feedback_report
+    if not args.dry_run and not args.fetch_only:
+        store.save(selection.period_id, manifest)
     save_bundle()
     error_ratio = summarize(results_by_sheet, cfg, logger)
     should_write = not args.dry_run and not args.fetch_only
@@ -1282,12 +1402,15 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     report = {'run_id': run_id, 'written_rows': 0, 'blocked': [], 'failures': []}
     if should_write:
         report = _deliver_weekly_results(fc, store, manifest, run_id, results_by_sheet, cfg, out)
+        report.update(feedback_report)
+        atomic_json(out / f'{run_id}_delivery.json', report)
         p(logger, f'[weekly-run] H:O 写入 {report["written_rows"]} 行，'
                   f'阻断 {len(report["blocked"])} 行')
     else:
         p(logger, '[weekly-run] dry/fetch-only：未写飞书')
     (out / f'{run_id}_weekly_summary.json').write_text(json.dumps({
         **report, 'period_id': selection.period_id,
+        **feedback_report,
         'elapsed_seconds': round(time.monotonic() - started, 3),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     if not args.dry_run and not args.fetch_only:

@@ -79,5 +79,25 @@
     "最终价格",
     "一致性检查",
     "时间戳"
-  ]
+  ],
+  "feedback": {
+    "enabled": false,
+    "timezone": "Asia/Shanghai",
+    "initial_window_days": 7,
+    "incremental_window_days": 3,
+    "retention_days": 10,
+    "max_rating": 3,
+    "target_spreadsheet_token": "",
+    "target_sheet_id": "",
+    "target_sheet_name": "Feedback差评汇总",
+    "state_path": "outputs/feedback/feedback_state.json",
+    "evidence_root": "outputs/feedback",
+    "store_order": ["store_a", "store_b"],
+    "page_wait_min": 8.0,
+    "page_wait_max": 12.0,
+    "detail_wait_min": 8.0,
+    "detail_wait_max": 12.0,
+    "max_pages": 50,
+    "stores": []
+  }
 }

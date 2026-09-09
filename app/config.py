@@ -66,6 +66,27 @@ DEFAULTS = {
     'feishu_output_headers': [
         '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '时间戳',
     ],
+    # Seller Central Feedback；默认关闭，未登记真实后台会话和固定子表前不得启用
+    'feedback': {
+        'enabled': False,
+        'timezone': 'Asia/Shanghai',
+        'initial_window_days': 7,
+        'incremental_window_days': 3,
+        'retention_days': 10,
+        'max_rating': 3,
+        'target_spreadsheet_token': '',
+        'target_sheet_id': '',
+        'target_sheet_name': 'Feedback差评汇总',
+        'state_path': str(OUTPUT_DIR / 'feedback' / 'feedback_state.json'),
+        'evidence_root': str(OUTPUT_DIR / 'feedback'),
+        'store_order': ['store_a', 'store_b'],
+        'page_wait_min': 8.0,
+        'page_wait_max': 12.0,
+        'detail_wait_min': 8.0,
+        'detail_wait_max': 12.0,
+        'max_pages': 50,
+        'stores': [],
+    },
     # R1.5 正式快照发现的全部业务子表（US 11 + CA 7）
     'sheets': ['PD03', 'PD17', 'PD05', 'PD25', 'XD03', 'XD17', 'PD52', 'PD39', 'PD33',
                'PDF075', 'PD63', 'CPD03', 'CPD17', 'CPD05', 'CPD25', 'CPD39', 'CPD33',
@@ -260,6 +281,67 @@ def validate(cfg: dict) -> None:
             raise RuntimeError(f'{key} 必须是布尔值')
     if not isinstance(cfg.get('html_server_bind'), str) or not cfg['html_server_bind'].strip():
         raise RuntimeError('html_server_bind 必须是非空字符串')
+
+    feedback = cfg.get('feedback')
+    if not isinstance(feedback, dict):
+        raise RuntimeError('feedback 必须是对象')
+    for key, lower, upper in (
+        ('initial_window_days', 1, 31),
+        ('incremental_window_days', 1, 14),
+        ('retention_days', 1, 31),
+        ('max_rating', 1, 5),
+    ):
+        try:
+            value = int(feedback.get(key))
+        except (TypeError, ValueError):
+            raise RuntimeError(f'feedback.{key} 必须是整数')
+        if not lower <= value <= upper:
+            raise RuntimeError(f'feedback.{key} 超出范围 [{lower}, {upper}]')
+    if feedback.get('timezone') != 'Asia/Shanghai':
+        raise RuntimeError('feedback.timezone 必须固定为 Asia/Shanghai')
+    if not isinstance(feedback.get('store_order'), list) or len(feedback['store_order']) != 2:
+        raise RuntimeError('feedback.store_order 必须正好包含两个店铺')
+    if len(set(feedback['store_order'])) != 2:
+        raise RuntimeError('feedback.store_order 不能包含重复店铺')
+    for key in ('page_wait_min', 'page_wait_max', 'detail_wait_min', 'detail_wait_max'):
+        try:
+            value = float(feedback.get(key))
+        except (TypeError, ValueError):
+            raise RuntimeError(f'feedback.{key} 必须是数字')
+        if value < 1 or value > 120:
+            raise RuntimeError(f'feedback.{key} 必须在1到120秒之间')
+    if feedback['page_wait_max'] < feedback['page_wait_min']:
+        raise RuntimeError('feedback.page_wait_max 不能小于 page_wait_min')
+    if feedback['detail_wait_max'] < feedback['detail_wait_min']:
+        raise RuntimeError('feedback.detail_wait_max 不能小于 detail_wait_min')
+    try:
+        max_pages = int(feedback.get('max_pages'))
+    except (TypeError, ValueError):
+        raise RuntimeError('feedback.max_pages 必须是整数')
+    if not 1 <= max_pages <= 500:
+        raise RuntimeError('feedback.max_pages 必须在1到500页之间')
+    if not isinstance(feedback.get('stores'), list):
+        raise RuntimeError('feedback.stores 必须是数组')
+    if feedback.get('enabled'):
+        if len(feedback['stores']) != 2:
+            raise RuntimeError('启用Feedback时必须登记两个店铺')
+        store_keys = []
+        for item in feedback['stores']:
+            if not isinstance(item, dict):
+                raise RuntimeError('feedback.stores 每项必须是对象')
+            store_keys.append(str(item.get('key') or '').strip())
+            for key in ('key', 'store_id', 'expected_store_identity',
+                        'feedback_manager_url', 'secret_ref'):
+                if not str(item.get(key) or '').strip():
+                    raise RuntimeError(f'启用Feedback时 feedback.stores.{key} 不能为空')
+            if not isinstance(item.get('selectors'), dict):
+                raise RuntimeError('启用Feedback时 feedback.stores.selectors 必须是对象')
+        if set(store_keys) != set(str(item) for item in feedback['store_order']):
+            raise RuntimeError('feedback.stores.key 必须与 feedback.store_order 一一对应')
+        if not str(feedback.get('target_spreadsheet_token') or '').strip():
+            raise RuntimeError('启用Feedback时 target_spreadsheet_token 不能为空')
+        if not str(feedback.get('target_sheet_id') or '').strip():
+            raise RuntimeError('启用Feedback时 target_sheet_id 不能为空')
 
 
 def ensure_dirs() -> None:
