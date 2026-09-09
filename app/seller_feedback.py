@@ -509,7 +509,9 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
 
 def _status_for_exception(exc: Exception) -> str:
     text = str(exc).lower()
-    if any(term in text for term in ('auth', 'login', 'permission', 'cookie', 'signin', '验证码')):
+    if any(term in text for term in (
+            'auth', 'login', 'permission', 'cookie', 'signin', 'apikey',
+            'api key', 'keychain', 'credential', '验证码')):
         return 'auth_error'
     return 'blocked'
 

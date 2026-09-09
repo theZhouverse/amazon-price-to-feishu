@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from seller_feedback_browser import FeedbackDataError, FeedbackStoreCollector, SafetyStop
+from seller_feedback_browser import (FeedbackDataError, FeedbackStoreCollector,
+                                      SafetyStop, validate_feedback_manager_url)
 
 
 def selectors():
@@ -89,7 +90,7 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         return {
             'key': 'store_a', 'store_id': 'store-id-a',
             'expected_store_identity': 'STORE-A',
-            'feedback_manager_url': 'https://seller.example/feedback',
+            'feedback_manager_url': 'https://sellercentral.amazon.com/feedback-manager',
             'selectors': selectors(),
         }
 
@@ -113,6 +114,19 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         broken['selectors'] = {}
         with self.assertRaises(FeedbackDataError):
             FeedbackStoreCollector(broken, FakeRunner(), sleep_fn=lambda _: None)
+
+    def test_non_seller_central_feedback_url_is_rejected_before_store_open(self):
+        runner = FakeRunner()
+        store = self.store()
+        store['feedback_manager_url'] = 'https://www.amazon.com/reviews'
+        collector = FeedbackStoreCollector(store, runner, sleep_fn=lambda _: None)
+        with self.assertRaises(FeedbackDataError):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls, [])
+
+    def test_feedback_manager_url_requires_feedback_path(self):
+        with self.assertRaises(FeedbackDataError):
+            validate_feedback_manager_url('https://sellercentral.amazon.com/orders')
 
     def test_unchanged_page_after_next_is_safety_stop(self):
         runner = FakeRunner()

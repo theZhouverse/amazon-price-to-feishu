@@ -19,6 +19,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Callable, Protocol
+from urllib.parse import urlparse
 
 from seller_feedback import (FeedbackDataError, FeedbackSafetyStop, parse_feedback_date,
                               redact_secrets)
@@ -45,6 +46,26 @@ _DANGER_MARKERS = (
     'signin', 'sign in', 'login required', 'access denied', 'suspicious',
     '被登出', '验证码', '风控',
 )
+
+
+def validate_feedback_manager_url(value: object) -> str:
+    """Accept only an HTTPS Seller Central URL that names the feedback area."""
+    url = str(value or '').strip()
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    host_pattern = r'^sellercentral(?:-[a-z0-9-]+)?\.amazon\.[a-z]{2,}(?:\.[a-z]{2,})?$'
+    target = (parsed.path or '') + ('?' + parsed.query if parsed.query else '')
+    if parsed.scheme.lower() != 'https' or not re.fullmatch(host_pattern, host):
+        raise FeedbackDataError(
+            f'Feedback管理器URL必须是HTTPS Seller Central域名，拒绝: {redact_secrets(url[:300])}'
+        )
+    if 'feedback' not in target.lower():
+        raise FeedbackDataError(
+            'Feedback管理器URL路径未包含feedback，拒绝访问非反馈页面'
+        )
+    return url
+
+
 def parse_cli_json(stdout: str) -> object:
     """Parse strict JSON or the largest JSON object in noisy CLI output."""
     text = str(stdout or '').strip()
@@ -365,7 +386,7 @@ class FeedbackStoreCollector:
     def __call__(self, *, window: dict | None = None) -> dict:
         started = time.monotonic()
         store_id = str(self.store.get('store_id') or '').strip()
-        url = str(self.store.get('feedback_manager_url') or '').strip()
+        url = validate_feedback_manager_url(self.store.get('feedback_manager_url'))
         if not store_id or not url:
             raise FeedbackDataError(f'店铺 {self.key}: store_id 或 feedback_manager_url 未登记')
         start = parse_feedback_date((window or {}).get('start')) if window else None

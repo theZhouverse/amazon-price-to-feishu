@@ -1,5 +1,11 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-09 紫鸟 CLI 只读预检阻断
+
+- 只读执行 `ziniao-cli doctor` 时，ZClaw Bridge 连通正常、客户端登录用户可见为`2026ZCY`，但本机 Keychain 缺少 `apiKey`（`read apiKey from keychain: keychain: item not found`）；随后 `store list --all --format json` 也因同一认证缺口停止。
+- 本轮没有打开任何店铺、没有访问Seller Central、没有读取或写入`Feedback差评汇总`，没有重建配置、切换profile或尝试登录。代码已将`apiKey`/`keychain`/`credential`错误单独归类为`auth_error`，方便日志和后续复盘。
+- 真实Feedback验收暂缓到按既有Secret流程恢复API Key后，从单店只读小批重新开始；Bridge连通或客户端登录态可见不能替代API认证和页面数据回读证据。
+
 ## 2026-09-09 前端图片与品牌故事列拆分
 
 - 用户确认品牌故事定位为页面中的精确标题`From the brand`；结果表不再把商品主图和品牌故事图片合并到同一列。当前开发副本目标布局为A:V：N商品主图、O`From the brand`品牌故事图片、P尺寸、Q BSR、R父子ASIN、S环保、T Amazon's Choice、U时间戳、V Amazon链接。

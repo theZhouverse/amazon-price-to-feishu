@@ -1251,7 +1251,9 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
         elapsed = round(time.monotonic() - started, 3)
         result = _feedback_report_base(
             'auth_error' if any(term in str(exc).lower()
-                                for term in ('auth', 'login', 'cookie', 'signin', '验证码'))
+                                for term in (
+                                    'auth', 'login', 'cookie', 'signin', 'apikey',
+                                    'api key', 'keychain', 'credential', '验证码'))
             else 'blocked',
             reason=f'{type(exc).__name__}: {exc}',
         )

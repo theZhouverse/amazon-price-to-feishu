@@ -168,6 +168,18 @@ class SellerFeedbackTest(unittest.TestCase):
             self.assertNotIn('secret-value', str(report))
             self.assertTrue((Path(temp) / 'feedback_collection.json').is_file())
 
+    def test_missing_cli_api_key_is_reported_as_auth_error(self):
+        def missing_key():
+            raise RuntimeError('read apiKey from keychain: item not found')
+
+        with tempfile.TemporaryDirectory() as temp:
+            report = collect_feedback(
+                'run1', {'store_a': missing_key, 'store_b': missing_key}, Path(temp),
+                window=feedback_window(NOW), store_order=('store_a', 'store_b'))
+        self.assertEqual(report['status'], 'auth_error')
+        self.assertEqual(report['stores']['store_a']['status'], 'auth_error')
+        self.assertEqual(report['stores']['store_b']['status'], 'auth_error')
+
     def test_state_advances_only_after_two_store_readback(self):
         report = {
             'run_id': 'run1',
