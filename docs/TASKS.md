@@ -43,6 +43,8 @@
 - [x] 增加`page_date_order=newest_first`和安全日期边界：页内日期缺失/排序异常阻断，整页早于窗口起点时停止历史分页；增加探针专用`max_detail_attempts`，默认0不限制生产详情读取，探针达到上限时安全关闭，不推进状态。
 - [x] 2026-09-10 受限环境和正常Windows权限分别核验紫鸟CLI：受限环境Keychain不可见；正常用户权限下项目级CLI `doctor`、Keychain、Bridge、客户端登录和两店列表通过。真实结构诊断回读20行当前页、两个标记候选和无登录信号；修复可见标记过滤后单店探针进入详情链路，但因探针详情上限主动阻断，未计为正式成功。
 - [x] Feedback定向离线回归已扩展为30项，全部通过；没有写入业务行，`feedback.enabled=false`保持。
+- [x] 2026-09-10 两店各一页容量只读探针通过：两店均20行、低星候选各6行，日期范围和分页按钮状态已记录，单页耗时约22秒；未点击订单、未翻页、未写表。
+- [ ] 2026-09-10 整条写入验收被飞书凭证门禁阻断：当前开发副本未提供`FS_APP_SECRET`，认证返回`invalid param`；不得自动复用其他项目`.env`中的Secret。待用户提供当前项目授权的飞书环境变量/凭证入口后，继续首次7日双店写入回读、状态推进、3日增量、10日清理和07:30任务验收。
 - [x] 全局紫鸟 CLI 已在用户授权后完成只读连通性复核：`doctor`、Keychain/API认证、ZClaw Bridge、客户端登录状态和`store list --all`均通过；确认两店为`26782671389969`（冬豚）和`26686718929338`（北蓉）。
 - [x] 两店已分别打开Seller Central并到达准确地址`https://sellercentral.amazon.com/feedback-manager/index.html`；两店都确认【最新反馈】、固定5列表头和20条当前页数据，未出现登录、验证码或风控信号。基础`/feedback-manager`空壳地址已列为不可用来源。
 - [x] 已登记主表真实选择器并适配Amazon KAT组件：星级从`kat-star-rating[value]`读取，订单号从`kat-link`及其Shadow DOM链接读取，点击目标使用唯一订单链接；代码改用`domcontentloaded`加有界等待，避免Feedback SPA的`networkidle`不收口。
