@@ -162,7 +162,10 @@ class ZiniaoCliRunner:
     def page_visit(self, store_id: str, url: str) -> object:
         return self.call([
             'page', 'visit', '--store-id', store_id, '--url', url,
-            '--wait-until', 'networkidle',
+            # Seller Central Feedback Manager keeps background requests open;
+            # networkidle does not settle reliably. The collector performs its
+            # own bounded post-navigation wait before reading the DOM.
+            '--wait-until', 'domcontentloaded',
         ], timeout=180)
 
     def page_wait_nav(self, store_id: str, timeout_ms: int = 30000) -> object:
@@ -190,11 +193,19 @@ def _required_selector_config(store: dict) -> dict:
         raise FeedbackDataError(
             f"店铺 {store.get('key') or store.get('store_id')}: 未登记 selectors，拒绝猜测页面结构"
         )
+    identity_mode = str(
+        store.get('identity_mode') or selectors.get('store_identity_mode')
+        or 'page_selector'
+    ).strip()
     required = (
-        'latest_feedback_marker', 'store_identity_selector', 'row_selector', 'date_selector',
+        'latest_feedback_marker', 'row_selector', 'date_selector',
         'rating_selector', 'order_id_selector', 'comment_selector',
     )
     missing = [key for key in required if not str(selectors.get(key) or '').strip()]
+    if identity_mode != 'cli_store_context' and not str(
+        selectors.get('store_identity_selector') or ''
+    ).strip():
+        missing.append('store_identity_selector')
     detail = selectors.get('detail')
     if not isinstance(detail, dict):
         missing.append('detail')
@@ -213,7 +224,7 @@ def _required_selector_config(store: dict) -> dict:
 def _read_script(selectors: dict) -> str:
     config = json.dumps({
         'marker': selectors['latest_feedback_marker'],
-        'identity': selectors['store_identity_selector'],
+        'identity': selectors.get('store_identity_selector', ''),
         'row': selectors['row_selector'],
         'date': selectors['date_selector'],
         'rating': selectors['rating_selector'],
@@ -221,6 +232,7 @@ def _read_script(selectors: dict) -> str:
         'comment': selectors['comment_selector'],
         'feedback_id': selectors.get('feedback_id_selector', ''),
         'order_link': selectors.get('order_link_selector', ''),
+        'identity_mode': selectors.get('store_identity_mode', 'page_selector'),
     }, ensure_ascii=False)
     return f'''/* feedback-read */ JSON.stringify((() => {{
       const cfg = {config};
@@ -232,12 +244,35 @@ def _read_script(selectors: dict) -> str:
           && style.visibility !== 'hidden' && style.opacity !== '0';
       }};
       const text = el => (el?.innerText || el?.textContent || '').trim();
+      const attribute = (el, name) => (el?.getAttribute(name) || '').trim();
       const find = (root, selector) => selector ? root.querySelector(selector) : null;
-      const marker = document.querySelector(cfg.marker);
-      const identity = text(document.querySelector(cfg.identity));
+      const shadowText = el => text(
+        el?.shadowRoot?.querySelector('a,button,[role="button"],span')
+      );
+      const label = el => text(el) || shadowText(el)
+        || (el?.getAttribute('aria-label') || '').trim()
+        || (el?.getAttribute('label') || '').trim();
+      const markerNodes = cfg.marker ? [...document.querySelectorAll(cfg.marker)] : [];
+      const exactMarkers = markerNodes.filter(el => text(el) === '最新反馈');
+      const marker = exactMarkers.length === 1 ? exactMarkers[0]
+        : (markerNodes.length === 1 ? markerNodes[0] : null);
+      const identity = cfg.identity ? text(document.querySelector(cfg.identity)) : '';
+      const orderValue = el => {{
+        const direct = label(el);
+        if (direct) return direct;
+        const href = el?.getAttribute('href')
+          || el?.shadowRoot?.querySelector('a[href]')?.getAttribute('href') || '';
+        const match = String(href).match(/\/orders-v3\/order\/([^/?#]+)/);
+        return match ? decodeURIComponent(match[1]) : '';
+      }};
       const nodes = [...document.querySelectorAll(cfg.row)].filter(visible);
       const rows = nodes.map((node, index) => {{
-        const value = key => text(find(node, cfg[key]));
+        const value = key => {{
+          const element = find(node, cfg[key]);
+          if (key === 'order') return orderValue(element);
+          if (key === 'rating') return attribute(element, 'value') || label(element);
+          return text(element);
+        }};
         return {{
           _dom_index: index,
           feedback_id: value('feedback_id'),
@@ -249,13 +284,16 @@ def _read_script(selectors: dict) -> str:
       }});
       const signature = rows.map(row => [row.feedback_id, row.feedback_date,
         row.rating, row.order_id, row.content].join('\\u241f')).join('\\u241e');
-      const buttons = [...document.querySelectorAll('button,a,[role="button"]')]
-        .filter(visible).filter(el => ['下一个', 'Next', '下一页']
-          .includes(text(el)));
+      const buttons = [...document.querySelectorAll(
+        'button,a,[role="button"],kat-button,kat-link'
+      )].filter(visible).filter(el => ['下一个', 'Next', '下一页']
+        .includes(label(el)));
       const next = {{ count: buttons.length,
         disabled: buttons.length === 1 && (buttons[0].disabled ||
-          buttons[0].getAttribute('aria-disabled') === 'true') }};
-      return {{ ok: true, marker_found: Boolean(marker), store_identity: identity,
+          buttons[0].getAttribute('aria-disabled') === 'true'
+          || buttons[0].getAttribute('disabled') !== null) }};
+      return {{ ok: true, marker_found: Boolean(marker), marker_count: markerNodes.length,
+        store_identity: identity, identity_mode: cfg.identity_mode,
         row_count: rows.length,
         rows, signature, next, url: location.href }};
     }})())'''
@@ -268,13 +306,22 @@ def _click_next_script() -> str:
           && style.display !== 'none' && style.visibility !== 'hidden'
           && style.opacity !== '0'; };
       const text = el => (el.innerText || el.textContent || '').trim();
-      const nodes = [...document.querySelectorAll('button,a,[role="button"]')]
-        .filter(visible).filter(el => ['下一个', 'Next', '下一页'].includes(text(el)));
+      const shadowText = el => text(
+        el?.shadowRoot?.querySelector('a,button,[role="button"],span')
+      );
+      const label = el => text(el) || shadowText(el)
+        || (el.getAttribute('aria-label') || '').trim()
+        || (el.getAttribute('label') || '').trim();
+      const nodes = [...document.querySelectorAll(
+        'button,a,[role="button"],kat-button,kat-link'
+      )].filter(visible).filter(el => ['下一个', 'Next', '下一页'].includes(label(el)));
       if (nodes.length !== 1) return {clicked: false, count: nodes.length};
       const el = nodes[0];
-      if (el.disabled || el.getAttribute('aria-disabled') === 'true')
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true'
+          || el.getAttribute('disabled') !== null)
         return {clicked: false, count: 1, disabled: true};
-      el.click(); return {clicked: true, count: 1};
+      const target = el.shadowRoot?.querySelector('button,a,[role="button"]') || el;
+      target.click(); return {clicked: true, count: 1};
     })())'''
 
 
@@ -288,20 +335,30 @@ def _click_order_script(selectors: dict, order_id: str) -> str:
     return f'''/* feedback-click-order */ JSON.stringify((() => {{
       const cfg = {config};
       const text = el => (el?.innerText || el?.textContent || '').trim();
+      const orderValue = el => {{
+        const direct = text(el) || (el?.getAttribute('aria-label') || '').trim();
+        if (direct) return direct;
+        const href = el?.getAttribute('href')
+          || el?.shadowRoot?.querySelector('a[href]')?.getAttribute('href') || '';
+        const match = String(href).match(/\/orders-v3\/order\/([^/?#]+)/);
+        return match ? decodeURIComponent(match[1]) : '';
+      }};
       const visible = el => {{ const rect = el.getBoundingClientRect();
         const style = getComputedStyle(el); return rect.width > 0 && rect.height > 0
           && style.display !== 'none' && style.visibility !== 'hidden'
           && style.opacity !== '0'; }};
       const rows = [...document.querySelectorAll(cfg.row)].filter(visible)
-        .filter(row => text(row.querySelector(cfg.order)) === cfg.order_id);
+        .filter(row => orderValue(row.querySelector(cfg.order)) === cfg.order_id);
       if (rows.length !== 1) return {{clicked: false, row_count: rows.length}};
       const row = rows[0];
       let links = cfg.link ? [...row.querySelectorAll(cfg.link)] :
-        [...row.querySelectorAll('a,button,[role="button"]')]
-          .filter(el => text(el) === cfg.order_id);
+        [...row.querySelectorAll('a,button,[role="button"],kat-link')]
+          .filter(el => orderValue(el) === cfg.order_id);
       links = links.filter(visible);
       if (links.length !== 1) return {{clicked: false, row_count: 1, link_count: links.length}};
-      links[0].click(); return {{clicked: true, order_id: cfg.order_id}};
+      const target = links[0].shadowRoot?.querySelector('a[href],button,[role="link"]')
+        || links[0];
+      target.click(); return {{clicked: true, row_count: 1, link_count: 1}};
     }})())'''
 
 
@@ -351,9 +408,23 @@ class FeedbackStoreCollector:
             raise SafetyStop('反馈页面读取没有返回结构化结果')
         if value.get('marker_found') is not True:
             raise SafetyStop('当前页面没有唯一可确认的【最新反馈】区域，停止读取')
+        identity_mode = str(
+            self.store.get('identity_mode') or self.selectors.get('store_identity_mode')
+            or 'page_selector'
+        ).strip()
         expected_identity = str(self.store.get('expected_store_identity') or '').strip()
         actual_identity = str(value.get('store_identity') or '').strip()
-        if not expected_identity or actual_identity != expected_identity:
+        if identity_mode == 'cli_store_context':
+            # Amazon does not render the Seller ID/store label in this page's
+            # visible header. The official CLI store context is the identity
+            # boundary; compare the configured expected value to the exact
+            # store ID used for every page call and record that mode in evidence.
+            if not expected_identity or expected_identity != str(store_id).strip():
+                raise SafetyStop(
+                    '反馈页面 CLI 店铺上下文与登记身份不一致：'
+                    f'expected={expected_identity!r}, store_id={store_id!r}'
+                )
+        elif not expected_identity or actual_identity != expected_identity:
             raise SafetyStop(
                 f'反馈页面店铺身份不一致，expected={expected_identity!r}, actual={actual_identity!r}'
             )

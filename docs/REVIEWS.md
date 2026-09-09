@@ -1,5 +1,14 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-09 全局紫鸟 CLI 与两店Feedback页面复核（最新）
+
+- 用户授权后，PATH 中的全局 `C:\Users\Administrator\AppData\Roaming\npm\ziniao-cli.cmd` 已完成只读复核：版本为`1.0.7`，`doctor`通过，Keychain/API认证、ZClaw Bridge和客户端登录用户`2026ZCY`可用；`store list --all --format json`返回冬豚`26782671389969`、北蓉`26686718929338`。没有更新CLI，也没有打印或改写API Key。
+- 从两个店铺Seller Central首页发现的可用目标地址是`https://sellercentral.amazon.com/feedback-manager/index.html`；基础路径`/feedback-manager`只返回空SPA壳，不能当作无数据。两个店铺均已单独打开、导航到准确地址、等待渲染并关闭，未出现登录、验证码或风控标志；两店均显示【反馈管理器】、【最新反馈】、`日期/评级/订单编号/评论/操作`表头和20条当前页记录。
+- 已通过只读DOM探针确认主表选择器：`.fbm-content.katal h3`（精确文本【最新反馈】）、`.fbm-content.katal kat-table-row:not(.fb-detail-table-header)`、`kat-table-cell.col_order_date`、`kat-table-cell.col_feedback_rating kat-star-rating[value]`、`kat-table-cell.col_order_id kat-link`以及第四个`kat-table-cell`评论单元格。当前页一次探针发现6条评级1–3记录；没有翻页，也没有写入飞书。
+- 已受控点击一条低星记录的`kat-link` Shadow DOM内部链接，成功进入`/orders-v3/order/<脱敏订单路由>`详情页；详情页未出现登录/验证码/风控标志。当前仅确认详情页存在`ASIN`、`SKU`标签元数据，订单商品编号的稳定标签和三个字段的精确选择器尚未确认，因此详情选择器仍为空，Feedback采集器继续fail-close。
+- `app/seller_feedback_browser.py`已切换到`domcontentloaded`并由代码执行有界等待，加入KAT自定义元素、`value`属性、Shadow DOM链接和CLI店铺上下文身份门禁；`config/config.json`已登记两店非敏感ID、准确Feedback URL和主表选择器，但`feedback.enabled=false`、固定Feedback Sheet ID为空，未启动生产写入或计划任务。
+- 本次只读复核没有写入`Feedback差评汇总`，没有安装/修改Windows计划任务；此前全局CLI的Keychain缺失记录属于早先探针，已被本次同一环境的成功复核更新，不需要重建凭证。
+
 ## 2026-09-09 全局紫鸟 CLI 只读预检阻断（不适用于项目级 CLI）
 
 - 只读执行 PATH 中的全局 `C:\Users\Administrator\AppData\Roaming\npm\ziniao-cli.cmd doctor` 时，ZClaw Bridge 连通正常、客户端登录用户可见为`2026ZCY`，但该 CLI 读取不到自己的 Keychain `apiKey`（`read apiKey from keychain: keychain: item not found`）；随后 `store list --all --format json` 也因同一认证缺口停止。该结果不能外推为项目级 CLI 失败。

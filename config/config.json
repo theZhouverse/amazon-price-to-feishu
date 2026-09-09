@@ -98,6 +98,61 @@
     "detail_wait_min": 8.0,
     "detail_wait_max": 12.0,
     "max_pages": 50,
-    "stores": []
+    "stores": [
+      {
+        "key": "store_a",
+        "store_id": "26782671389969",
+        "expected_store_identity": "26782671389969",
+        "identity_mode": "cli_store_context",
+        "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
+        "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
+        "selectors": {
+          "latest_feedback_marker": ".fbm-content.katal h3",
+          "store_identity_mode": "cli_store_context",
+          "store_identity_selector": "",
+          "row_selector": ".fbm-content.katal kat-table-row:not(.fb-detail-table-header)",
+          "date_selector": "kat-table-cell.col_order_date",
+          "rating_selector": "kat-table-cell.col_feedback_rating kat-star-rating",
+          "order_id_selector": "kat-table-cell.col_order_id kat-link",
+          "comment_selector": "kat-table-cell:nth-child(4)",
+          "feedback_id_selector": "",
+          "order_link_selector": "kat-table-cell.col_order_id kat-link",
+          "detail": {
+            "marker": "",
+            "order_id_selector": "",
+            "order_item_number_selector": "",
+            "asin_selector": "",
+            "sku_selector": ""
+          }
+        }
+      },
+      {
+        "key": "store_b",
+        "store_id": "26686718929338",
+        "expected_store_identity": "26686718929338",
+        "identity_mode": "cli_store_context",
+        "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
+        "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
+        "selectors": {
+          "latest_feedback_marker": ".fbm-content.katal h3",
+          "store_identity_mode": "cli_store_context",
+          "store_identity_selector": "",
+          "row_selector": ".fbm-content.katal kat-table-row:not(.fb-detail-table-header)",
+          "date_selector": "kat-table-cell.col_order_date",
+          "rating_selector": "kat-table-cell.col_feedback_rating kat-star-rating",
+          "order_id_selector": "kat-table-cell.col_order_id kat-link",
+          "comment_selector": "kat-table-cell:nth-child(4)",
+          "feedback_id_selector": "",
+          "order_link_selector": "kat-table-cell.col_order_id kat-link",
+          "detail": {
+            "marker": "",
+            "order_id_selector": "",
+            "order_item_number_selector": "",
+            "asin_selector": "",
+            "sku_selector": ""
+          }
+        }
+      }
+    ]
   }
 }

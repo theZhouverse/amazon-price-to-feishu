@@ -31,6 +31,14 @@
 
 > 本节是实施任务清单，SPEC中的新增内容目前只代表目标规格，不代表代码已经实现或云端已经验收。
 
+### 最新开发/只读验收进度（2026-09-09）
+
+- [x] 全局紫鸟 CLI 已在用户授权后完成只读连通性复核：`doctor`、Keychain/API认证、ZClaw Bridge、客户端登录状态和`store list --all`均通过；确认两店为`26782671389969`（冬豚）和`26686718929338`（北蓉）。
+- [x] 两店已分别打开Seller Central并到达准确地址`https://sellercentral.amazon.com/feedback-manager/index.html`；两店都确认【最新反馈】、固定5列表头和20条当前页数据，未出现登录、验证码或风控信号。基础`/feedback-manager`空壳地址已列为不可用来源。
+- [x] 已登记主表真实选择器并适配Amazon KAT组件：星级从`kat-star-rating[value]`读取，订单号从`kat-link`及其Shadow DOM链接读取，点击目标使用唯一订单链接；代码改用`domcontentloaded`加有界等待，避免Feedback SPA的`networkidle`不收口。
+- [x] 受控单条低星详情探测已成功进入订单详情路由；只读确认详情页有`ASIN`/`SKU`标签且无登录/验证码/风控信号。订单商品编号及三个字段的稳定选择器尚未确认，详情配置保持空白，不能勾选F4/F10。
+- [ ] 继续下一步前仍需完成订单详情字段选择器（订单商品编号、ASIN、SKU）和固定`Feedback差评汇总` Sheet ID的人工核对；在此之前保持`feedback.enabled=false`，不写入飞书、不安装独立计划任务。
+
 - [ ] 为商品结果表增加N:T七个固定前端列，U/V固定放时间戳和Amazon链接；前端列显示`✅`/`❌`/`-`，bundle保留原始状态；完成旧A:P/A:O布局向A:V的安全迁移、写前备份、写后整行回读和尾行清理。
 - [ ] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致、币种错误等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
 - [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
