@@ -25,6 +25,15 @@
 - 前端分支只验收`app/frontend_checks.py`及其调用链：同一份商品HTML/DOM快照内完成当前ASIN身份确认、七项字段提取、证据定位、状态判定、同一快照时间戳和N:T勾叉映射；本地测试与历史HTML回放不打开紫鸟店铺、不读取Seller Central、不写入飞书。
 - 紫鸟/ZClaw店铺浏览器、实时页面采集、周报副本、A:V云端写入/回读、Feedback和生产调度均由另一个后端/发布分支承担。后端接入时只能消费前端bundle中的`pass`/`fail`/`unknown`和证据字段，不能放宽当前ASIN身份门禁，也不能将`unknown`改写为`fail`或`pass`。
 
+## 2026-09-10 前端隔离在线表测试
+
+- 使用开发副本的历史源快照`outputs/snapshots/20260908_155743/source.json`和离线HTML根目录进行前端规则验证；没有打开紫鸟、没有读取Seller Central、没有调用生产周报流程。
+- 新建独立测试 Spreadsheet：[TEST_前端规则验证_20260909_233023_frontend](https://wit0jhu6kvu.feishu.cn/sheets/Q7X9scETJhkrm2t6xiVcpXxdnBg)。测试表包含`TEST_SUMMARY`、18个业务子表和创建时自带的空白`Sheet1`；固定结果表、Feedback表和生产Token均未写入。
+- 先测试`PD03`：源行111、写入111、HTML匹配111、缺失0；七项检查累计`pass=499`、`fail=208`、`unknown/not_applicable=70`；在线写入和`A3:V113`写后回读通过，总耗时233.672秒。
+- 再测试全部18个业务子表：源行690、写入690、HTML匹配532、缺失158；七项检查累计`pass=2040`、`fail=1187`、`unknown/not_applicable=1603`；18个子表逐表写入和回读均通过，总耗时1226.625秒。`partial_unknown`只表示当前离线证据缺失，不能解释为在线写入失败或前端规则失败。
+- 最终只读复核确认测试工作簿有20个子表、`TEST_SUMMARY`回读20行，`PD03`回读111行且每行22列A:V。V列URL按飞书富文本对象回读，测试工具已兼容`cell.link/text`并重新验证通过。
+- 本地证据：`outputs/frontend_online_tests/20260909_233023_frontend/{single_report.json,all_report.json,manifest.json}`。本次只验证开发副本和独立测试表，尚未合并生产代码或修改生产结果表。
+
 ## 2026-09-09 Feedback固定结果子表注册与表头回读（最新）
 
 - 已在固定结果 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 中按精确标题创建唯一子表 `Feedback差评汇总`，回查得到 Sheet ID `41u25y`；写入后按 `A1:I1` 回读，9列表头完全匹配：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`。
