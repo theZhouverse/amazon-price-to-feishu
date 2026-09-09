@@ -1,10 +1,16 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
-## 2026-09-09 紫鸟 CLI 只读预检阻断
+## 2026-09-09 全局紫鸟 CLI 只读预检阻断（不适用于项目级 CLI）
 
-- 只读执行 `ziniao-cli doctor` 时，ZClaw Bridge 连通正常、客户端登录用户可见为`2026ZCY`，但本机 Keychain 缺少 `apiKey`（`read apiKey from keychain: keychain: item not found`）；随后 `store list --all --format json` 也因同一认证缺口停止。
+- 只读执行 PATH 中的全局 `C:\Users\Administrator\AppData\Roaming\npm\ziniao-cli.cmd doctor` 时，ZClaw Bridge 连通正常、客户端登录用户可见为`2026ZCY`，但该 CLI 读取不到自己的 Keychain `apiKey`（`read apiKey from keychain: keychain: item not found`）；随后 `store list --all --format json` 也因同一认证缺口停止。该结果不能外推为项目级 CLI 失败。
 - 本轮没有打开任何店铺、没有访问Seller Central、没有读取或写入`Feedback差评汇总`，没有重建配置、切换profile或尝试登录。代码已将`apiKey`/`keychain`/`credential`错误单独归类为`auth_error`，方便日志和后续复盘。
-- 真实Feedback验收暂缓到按既有Secret流程恢复API Key后，从单店只读小批重新开始；Bridge连通或客户端登录态可见不能替代API认证和页面数据回读证据。
+- 真实Feedback验收不得混用全局 CLI；应固定使用参考项目同一项目级 CLI，并在正常本机权限下重新执行 `doctor`、`store list` 和单店页面只读检查。
+
+## 2026-09-09 参考项目级紫鸟 CLI 只读复核
+
+- 按 `D:\projects\T2_BDLD_weekly_20260827` 的既有实现固定使用 `C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\ziniao-cli.cmd`；该 CLI 的 `doctor` 在正常本机权限下通过，API Key 由本机 Keychain 读取，ZClaw Bridge 正常，客户端登录用户为`2026ZCY`。
+- 同一项目级 CLI 的 `store list --all --format json` 只读返回两个店铺：冬豚 `26782671389969`、北蓉 `26686718929338`。本次没有执行 `store open`，没有访问 Seller Central，没有读取或写入`Feedback差评汇总`。
+- Feedback 适配层已经把该项目级 CLI 放在全局 CLI 之前；后续真实验收必须沿用这条路径，认证状态以项目级 CLI 为准，不能因为全局 CLI 的 Keychain 缺失而阻断或重建凭证。
 
 ## 2026-09-09 前端图片与品牌故事列拆分
 
