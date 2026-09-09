@@ -1,5 +1,11 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-09 前端实时商品页只读小样本
+
+- 使用 Amazon.com 直接商品页做只读 UI 核验，未登录、未输入凭证、未点击购买或提交控件。`B0CLNJH915` 当前 URL 与商品标题 ASIN 对应，主图、当前选中尺寸`4' x 6'`、可见`Amazon's Choice`、`1 sustainability feature`和`From the brand`模块标题均出现在当前商品页；页面未出现登录、验证码或风控阻断。页面中的推荐商品也单独出现`Amazon's Choice`/sustainability文案，不能拿来作为当前商品证据，这与当前模块范围门禁一致。
+- `B0BNDLPW1L`和`B0G5Y2TJQM` 当前 Amazon.com 直接返回`Page Not Found`；按照 v10 页面门禁，这两条应整页七项`unknown`、结果表N:T显示`-`，不得从历史HTML、推荐卡或页面残留拼接部分结果。历史HTML中`B0G5Y2TJQM`的主商品锚点仍指向`B0GZZH77J1`，离线规则已验证同样会整页阻断。
+- 本次只读核验没有读取或写入周报、Feedback或其他后端数据，也没有把实时页面结果写入固定结果表；US/CA更多实时样本、同一批次的预期尺寸注入、A:V最小批云端写入与写后回读仍未完成。
+
 ## 2026-09-09 Feedback固定结果子表注册与表头回读（最新）
 
 - 已在固定结果 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 中按精确标题创建唯一子表 `Feedback差评汇总`，回查得到 Sheet ID `41u25y`；写入后按 `A1:I1` 回读，9列表头完全匹配：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`。
