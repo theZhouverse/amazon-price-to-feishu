@@ -22,11 +22,11 @@ class MemoryTable(FakeFeishu):
     def __init__(self, rows=None, fail_second=False):
         super().__init__({'s1': source(*(rows or [])), 's2': []}, with_result=True)
         self.result_sheets['EMPTY'] = 'r2'
-        self.grids = {'r1': [['title'], RESULT_HEADERS + [''],
-                            ['B000000001'] + ['old'] * 15,
-                            ['B000000009'] + ['old'] * 15,
-                            ['B000000008'] + ['old'] * 15],
-                      'r2': [['title'], RESULT_HEADERS + ['']]}
+        self.grids = {'r1': [['title'], RESULT_HEADERS,
+                            ['B000000001'] + ['old'] * 21,
+                            ['B000000009'] + ['old'] * 21,
+                            ['B000000008'] + ['old'] * 21],
+                      'r2': [['title'], RESULT_HEADERS]}
         self.fail_second = fail_second
 
     def read_values(self, token, sid, rng):
@@ -137,9 +137,9 @@ class PriceRefreshTest(unittest.TestCase):
         self.assertEqual(fc.grids['r1'][2][:2], ['B000000002', 'new'])
         self.assertEqual(fc.grids['r1'][3][:2], ['B000000001', 'changed'])
         self.assertEqual(fc.grids['r1'][3][6], 27)
-        self.assertEqual(fc.grids['r1'][4], [''] * 16)
-        self.assertEqual(fc.grids['r1'][2][14], result('B000000002').product_url)
-        self.assertTrue(all(values[0] != [''] * 16 for _, _, values in fc.writes))
+        self.assertEqual(fc.grids['r1'][4], [''] * 22)
+        self.assertEqual(fc.grids['r1'][2][21], result('B000000002').product_url)
+        self.assertTrue(all(values[0] != [''] * 22 for _, _, values in fc.writes))
         self.assertEqual(fc.result_sheets['PD03'], 'r1')
 
     def test_missing_asin_blocks_before_first_write(self):
@@ -186,7 +186,7 @@ class PriceRefreshTest(unittest.TestCase):
         fc = MemoryTable([])
         report = self.publish(fc, {'PD03': [], 'EMPTY': []})
         self.assertEqual(report['status'], 'complete')
-        self.assertEqual(fc.grids['r1'][2], [''] * 16)
+        self.assertEqual(fc.grids['r1'][2], [''] * 22)
 
     def test_unknown_layout_blocks_before_writes(self):
         fc = MemoryTable([row('B000000001')])

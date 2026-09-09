@@ -14,7 +14,7 @@ from config import SNAPSHOT_DIR, CACHE_ROOT
 from models import CrawlResult, PageStatus, ReportRow
 from runtime_state import atomic_json
 
-SCHEMA_VERSION = 5  # invalidates results captured without region/price-evidence checks
+SCHEMA_VERSION = 6  # invalidates results captured without same-page frontend checks
 
 def validate_recovery_metadata(meta, cfg):
     """Do not publish stale calculations after a parser or tolerance change."""
@@ -228,6 +228,8 @@ def _crawl_from_dict(d: dict) -> CrawlResult | None:
     cr.post_archive_delay_seconds = float(d.get('post_archive_delay_seconds') or 0)
     cr.stripped_noncore_css_resources = int(
         d.get('stripped_noncore_css_resources') or 0)
+    cr.frontend_checks = d.get('frontend_checks') or {}
+    cr.frontend_check_rule_version = d.get('frontend_check_rule_version') or ''
     return cr
 
 

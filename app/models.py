@@ -119,6 +119,10 @@ class CrawlResult:
     archive_error: str = ''
     post_archive_delay_seconds: float = 0.0
     stripped_noncore_css_resources: int = 0
+    # Same-page product checks.  The values are evidence-rich dictionaries;
+    # only their status is written to the fixed result table.
+    frontend_checks: dict = field(default_factory=dict)
+    frontend_check_rule_version: str = ''
 
     def six_columns(self) -> list:
         """飞书固定六列（顺序固定）：展示价格/折扣类型/折扣值/最终价格/一致性检查/时间戳"""
@@ -132,6 +136,15 @@ class CrawlResult:
             self.match,
             self.timestamp,
         ]
+
+    def frontend_columns(self) -> list[str]:
+        """Visible N:T values; checks are ✅/❌ and unknown states are '-'."""
+        from frontend_checks import frontend_columns
+        return frontend_columns(
+            self.frontend_checks,
+            page_status=self.status.value if isinstance(self.status, PageStatus)
+            else str(self.status or ''),
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -173,4 +186,6 @@ class CrawlResult:
             'archive_error': self.archive_error,
             'post_archive_delay_seconds': self.post_archive_delay_seconds,
             'stripped_noncore_css_resources': self.stripped_noncore_css_resources,
+            'frontend_checks': self.frontend_checks,
+            'frontend_check_rule_version': self.frontend_check_rule_version,
         }

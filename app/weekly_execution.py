@@ -86,6 +86,18 @@ def _prepare_price_run(fc, store, selection, registry, cfg, run_id, allow_create
     if resume and not allow_create and old.get('status') != 'ready':
         raise RuntimeError('只读模式不能续作云端快照初始化')
     if not allow_create and not resume:
+        # A newly prepared weekly snapshot is already the safe read-only
+        # source for a frontend sample run, even before A:G has been published
+        # to the fixed result table. Do not fall back to the mutable registry
+        # source in this case: field matching and Amazon identity checks must
+        # exercise the frozen copy requested by the operator.
+        if (old and old.get('status') == 'ready' and old.get('mapping_ready')
+                and old.get('link_rules_ready')
+                and (old.get('snapshot') or {}).get('spreadsheet_token')):
+            manifest = deepcopy(old)
+            manifest['snapshot_run_id'] = run_id
+            manifest['readonly_preview'] = True
+            return manifest
         # Dry/fetch-only observes live source without making a cloud copy.
         from weekly_registry import validate_feishu_resource_url
         kind, token = validate_feishu_resource_url(selection.source_url, cfg['feishu_allowed_hosts'])

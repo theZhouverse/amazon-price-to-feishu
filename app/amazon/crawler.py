@@ -28,6 +28,7 @@ from amazon.parser import (
 from amazon.selectors import (
     TITLE_404, TITLE_BLOCKED, TITLE_CAPTCHA,
 )
+from frontend_checks import FRONTEND_CHECK_RULE_VERSION, inspect_frontend, unknown_checks
 from models import CrawlResult, PageStatus, ReportRow
 from product_links import MARKETPLACES, MarketplaceProfile
 
@@ -363,6 +364,19 @@ class AmazonBrowser:
                 cr.status = PageStatus.CRAWL_ERROR
                 cr.error = 'location_unverified: 当前商品页面邮编不匹配'
                 return cr
+            # Price parsing and all six frontend checks consume this same
+            # frozen DOM. No check is allowed to trigger another navigation.
+            cr.frontend_check_rule_version = FRONTEND_CHECK_RULE_VERSION
+            try:
+                cr.frontend_checks = inspect_frontend(
+                    sample['html'], row.size, row.asin,
+                    page_ready=True, page_status='ok', page_url=cr.page_url)
+            except Exception as exc:
+                # A selector failure is explicit unknown, never a fabricated
+                # pass and never a price crawl failure.
+                cr.frontend_checks = unknown_checks(
+                    f'前端检查解析失败: {type(exc).__name__}', page_url=cr.page_url)
+
             tree = Tree(sample['html'])
             cands = parse_main_price(tree)
             price, rule, ambiguous = select_main_price(cands, str(cfg['ambiguous_price_ratio']))

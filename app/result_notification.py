@@ -29,13 +29,18 @@ def completion_text(*, period_id: str, run_id: str, started_at: str,
                     finished_at: str, elapsed_seconds: float, sheet_count: int,
                     written_rows: int, blocked_count: int, result_name: str,
                     result_url: str, local_data: str,
-                    error_ratio: float | None = None) -> str:
+                    error_ratio: float | None = None,
+                    source_period_id: str = '', selection_mode: str = '',
+                    scheduled_slot: str = '', frontend_status_counts: dict | None = None,
+                    feedback_status: str = '') -> str:
     lines = [
         'Hi，有个任务完成请查收.',
         '',
         'Amazon 周报前端价格捕捉任务',
         '',
         f'周期：{display_period(period_id, run_id)}', f'运行编号：{run_id}',
+        *([f'来源周期：{source_period_id}', f'来源选择：{selection_mode}（{scheduled_slot}）']
+          if source_period_id or selection_mode or scheduled_slot else []),
         f'开始：{started_at.replace("T", " ")}', f'结束：{finished_at.replace("T", " ")}',
         f'完整耗时：{int(elapsed_seconds) // 60}分{int(elapsed_seconds) % 60:02d}秒',
         '',
@@ -44,6 +49,11 @@ def completion_text(*, period_id: str, run_id: str, started_at: str,
     ]
     if error_ratio is not None:
         lines.append(f'技术异常率：{error_ratio:.1%}')
+    if frontend_status_counts is not None:
+        lines.append('前端检查：' + ' '.join(
+            f'{key}={value}' for key, value in frontend_status_counts.items()))
+    if feedback_status:
+        lines.append(f'Feedback状态：{feedback_status}')
     lines.extend(['', f'结果表：{result_name}', result_url,
                   f'本地数据：{local_data}', f'说明文档：{INSTRUCTIONS_URL}'])
     return '\n'.join(lines)

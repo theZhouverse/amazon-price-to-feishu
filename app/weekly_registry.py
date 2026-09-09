@@ -2,7 +2,7 @@
 """固定周报登记表的纯解析与确定性选择规则。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
@@ -20,6 +20,9 @@ class RegistrySelection:
     status: str
     raw: dict
     sequence: int | None = None
+    scheduled_slot: str = 'manual'
+    selection_mode: str = 'manual'
+    pending_period_change: dict | None = None
 
 
 def validate_feishu_resource_url(url: str, allowed_hosts: list[str]) -> tuple[str, str]:
@@ -179,3 +182,98 @@ def select_current_registry_row(records: list[dict], now: datetime,
         status='active',
         raw=dict(record),
     )
+
+
+def _selection_from_record(record: dict, allowed_hosts: list[str]) -> RegistrySelection:
+    """Build a validated selection for a specific already-known period."""
+    source_url = str(record.get('source_url') or '').strip()
+    if not source_url:
+        raise RuntimeError(f'登记表第 {record.get("_row_number")} 行链接为空')
+    validate_feishu_resource_url(source_url, allowed_hosts)
+    if record.get('_schema') == 'simple':
+        try:
+            sequence = int(record.get('sequence'))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f'登记表第 {record.get("_row_number")} 行序号必须是整数') from exc
+        return RegistrySelection(
+            row_number=int(record.get('_row_number') or 0),
+            period_id=f'seq-{sequence}', source_url=source_url,
+            effective_at=None, status='active', raw=dict(record), sequence=sequence,
+        )
+    effective = _parse_datetime(record.get('effective_at'))
+    if str(record.get('status') or '').strip().lower() != 'active':
+        raise RuntimeError(f'登记表周期不是 active: {record.get("period_id")}')
+    return RegistrySelection(
+        row_number=int(record.get('_row_number') or 0),
+        period_id=str(record.get('period_id') or '').strip(), source_url=source_url,
+        effective_at=effective, status='active', raw=dict(record),
+    )
+
+
+def _find_period_selection(records: list[dict], period_id: str,
+                           allowed_hosts: list[str]) -> RegistrySelection:
+    matches = []
+    for record in records:
+        candidate = str(record.get('period_id') or '').strip()
+        if candidate == str(period_id or '').strip():
+            matches.append(record)
+    if len(matches) != 1:
+        raise RuntimeError(f'上一周期 {period_id!r} 在登记表中不存在唯一有效记录')
+    return _selection_from_record(matches[0], allowed_hosts)
+
+
+def _is_newer_selection(current: RegistrySelection, previous: RegistrySelection) -> bool:
+    if current.sequence is not None and previous.sequence is not None:
+        return current.sequence > previous.sequence
+    if current.effective_at is not None and previous.effective_at is not None:
+        return current.effective_at > previous.effective_at
+    if current.period_id == previous.period_id:
+        return False
+    raise RuntimeError('相邻周期缺少可比较的序号或生效时间，禁止静默切换')
+
+
+def select_for_scheduled_slot(records: list[dict], now: datetime,
+                              allowed_hosts: list[str], scheduled_slot: str,
+                              previous_period_id: str = '') -> RegistrySelection:
+    """Select a source period using the scheduler's planned slot.
+
+    ``StartWhenAvailable`` can launch a Monday task hours late.  The slot is
+    therefore an explicit input, not inferred from the process wall clock.
+    Monday morning carries the prior fixed period, Monday afternoon requires a
+    newer registry row, and weekday slots keep the prior period while exposing
+    a pending change.
+    """
+    slot = str(scheduled_slot or 'manual').strip().lower()
+    allowed = {'manual', 'monday_0730', 'monday_1530',
+               'weekday_0730', 'weekday_1530'}
+    if slot not in allowed:
+        raise RuntimeError(f'不支持的 scheduled_slot: {scheduled_slot!r}')
+    latest = select_current_registry_row(records, now, allowed_hosts)
+    previous = (_find_period_selection(records, previous_period_id, allowed_hosts)
+                if previous_period_id else None)
+
+    if slot == 'manual':
+        return replace(latest, scheduled_slot=slot, selection_mode='manual')
+    if slot == 'monday_0730':
+        if previous is None:
+            raise RuntimeError('周一07:30缺少上一周期固定manifest/period_id，安全停止')
+        return replace(previous, scheduled_slot=slot, selection_mode='monday_carryover')
+    if slot == 'monday_1530':
+        if previous is not None and not _is_newer_selection(latest, previous):
+            raise RuntimeError('周一15:30登记表没有比上一周期更高的有效序号，安全停止')
+        return replace(latest, scheduled_slot=slot, selection_mode='monday_switch')
+
+    # Tuesday-Friday must not silently adopt a newly appeared row.  Keep the
+    # ready period and carry an auditable pending change to the manifest/log.
+    if previous is None:
+        raise RuntimeError('工作日稳态任务缺少上一周期固定manifest/period_id，安全停止')
+    pending = None
+    if latest.period_id != previous.period_id:
+        pending = {
+            'period_id': latest.period_id,
+            'source_url': latest.source_url,
+            'row_number': latest.row_number,
+            'reason': '非换周时点发现更高有效登记，不自动切换',
+        }
+    return replace(previous, scheduled_slot=slot, selection_mode='weekday_steady',
+                   pending_period_change=pending)
