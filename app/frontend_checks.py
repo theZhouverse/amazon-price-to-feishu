@@ -15,7 +15,7 @@ from collections import Counter
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-09-v9'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-09-v10'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -382,7 +382,7 @@ def _page_product_asin(raw_nodes: list) -> str:
     in one HTML document.  The title widget is the narrowest stable anchor for
     the product actually being displayed; ``#ASIN`` is a fallback for older
     layouts.  This is intentionally separate from per-field evidence so a
-    mismatched page can be stopped before any of the six columns are inferred.
+        mismatched page can be stopped before any of the seven columns are inferred.
     """
     for node in raw_nodes:
         attrs = getattr(node, 'attrs', {})
@@ -613,6 +613,10 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     if requested_asin and url_asin and url_asin != requested_asin:
         return unknown_checks(
             f'页面URL ASIN 与请求 ASIN 不一致: 请求 {requested_asin}，URL {url_asin}',
+            page_url=page_url, captured_at=captured_at)
+    if requested_asin and not page_asin and not url_asin:
+        return unknown_checks(
+            f'无法确认页面主商品 ASIN: 页面缺少主商品身份锚点，无法安全匹配请求 ASIN {requested_asin}',
             page_url=page_url, captured_at=captured_at)
 
     main_image, main_locator = _direct_or_region_image(nodes)
