@@ -31,14 +31,28 @@
 - 前端分支只验收`app/frontend_checks.py`及其调用链：同一份商品HTML/DOM快照内完成当前ASIN身份确认、七项字段提取、证据定位、状态判定、同一快照时间戳和N:T勾叉映射；本地测试与历史HTML回放不打开紫鸟店铺、不读取Seller Central、不写入飞书。
 - 紫鸟/ZClaw店铺浏览器、实时页面采集、周报副本、A:V云端写入/回读、Feedback和生产调度均由另一个后端/发布分支承担。后端接入时只能消费前端bundle中的`pass`/`fail`/`unknown`和证据字段，不能放宽当前ASIN身份门禁，也不能将`unknown`改写为`fail`或`pass`。
 
-## 2026-09-10 前端隔离在线表测试
+## 2026-09-10 前端隔离在线表测试（已废止为实时验收依据）
 
-- 使用开发副本的历史源快照`outputs/snapshots/20260908_155743/source.json`和离线HTML根目录进行前端规则验证；没有打开紫鸟、没有读取Seller Central、没有调用生产周报流程。
+- 使用开发副本的历史源快照`outputs/snapshots/20260908_155743/source.json`和离线HTML根目录进行前端规则验证；没有打开真实Amazon商品链接。该运行只能作为离线选择器回归，不能证明实时页面匹配或完整运行完成。
 - 新建独立测试 Spreadsheet：[TEST_前端规则验证_20260909_233023_frontend](https://wit0jhu6kvu.feishu.cn/sheets/Q7X9scETJhkrm2t6xiVcpXxdnBg)。测试表包含`TEST_SUMMARY`、18个业务子表和创建时自带的空白`Sheet1`；固定结果表、Feedback表和生产Token均未写入。
 - 先测试`PD03`：源行111、写入111、HTML匹配111、缺失0；七项检查累计`pass=499`、`fail=208`、`unknown/not_applicable=70`；在线写入和`A3:V113`写后回读通过，总耗时233.672秒。
-- 再测试全部18个业务子表：源行690、写入690、HTML匹配532、缺失158；七项检查累计`pass=2040`、`fail=1187`、`unknown/not_applicable=1603`；18个子表逐表写入和回读均通过，总耗时1226.625秒。`partial_unknown`只表示当前离线证据缺失，不能解释为在线写入失败或前端规则失败。
+- 再测试全部18个业务子表：源行690、写入690、HTML匹配532、缺失158；七项检查累计`pass=2040`、`fail=1187`、`unknown/not_applicable=1603`；18个子表逐表写入和回读均通过，总耗时1226.625秒。以上统计仅用于离线规则回放和表格写入器回归，不能解释为实时页面结果；必须以下方实时商品页验证替代。
+
+## 2026-09-10 前端实时商品链接隔离验收（已完成执行，待生产门禁）
+
+- 用户已明确纠正验收口径：历史`D:\projects\amazon_daily\_daily\htmls`只用于学习和回归，实际判断必须逐个读取每个ASIN的真实Amazon商品链接。
+- 已修正`tools/frontend_online_test.py`：现在调用原入口`app/run.py --weekly-run --dry-run --force-fetch`（PD03最小样例等同原启动中心的`--sheets PD03 --limit 1`），只消费原流程生成的live bundle；原流程内部负责真实页面导航、身份门禁、价格链路和七项前端检查，离线HTML不参与运行时判定。测试结果再写入新建隔离Spreadsheet并逐范围回读，绝不调用生产发布器。
+- 新工具输出标记为`source_mode=original_weekly_run_live_bundle`、`offline_html_role=fixture_only_not_runtime_input`，并保留原入口命令、bundle、日志和耗时；待PD03实时小批安全通过后再运行全部18个子表。
 - 最终只读复核确认测试工作簿有20个子表、`TEST_SUMMARY`回读20行，`PD03`回读111行且每行22列A:V。V列URL按飞书富文本对象回读，测试工具已兼容`cell.link/text`并重新验证通过。
 - 本地证据：`outputs/frontend_online_tests/20260909_233023_frontend/{single_report.json,all_report.json,manifest.json}`。本次只验证开发副本和独立测试表，尚未合并生产代码或修改生产结果表。
+
+### 2026-09-10 原入口实时全量结果
+
+- 单行门禁先按原入口`app/run.py --weekly-run --sheets PD03 --limit 1 --dry-run --force-fetch`完成：run `20260910_083340`，真实页面`ok`，1行七项`6 pass / 1 fail / 0 unknown`；隔离表：[TEST_前端真实页面验证_20260910_083340](https://wit0jhu6kvu.feishu.cn/sheets/OmQssX2XrhowNDt5fI7cH0Hjn1e)。
+- 全量严格按原入口`app/run.py --weekly-run --dry-run --force-fetch`完成：run `20260910_083515`，18个业务子表、719行（690条可抓源行+29条`source_data_invalid`保留行），原始实时抓取耗时`4230.359s`；隔离表写入和回读额外耗时后总计`4288.5s`。
+- 原始页面状态：`ok=483`、`identity_mismatch=166`、`crawl_error=36`、`source_data_invalid=29`、`parse_error=5`；七项前端状态累计`pass=1879`、`fail=1499`、`unknown/not_applicable=1655`。`identity_mismatch`、`crawl_error`、`parse_error`和`source_data_invalid`均保留为页面/源数据状态，不被伪装成普通字段`fail`。
+- 全量隔离表：[TEST_前端真实页面验证_20260910_083515](https://wit0jhu6kvu.feishu.cn/sheets/GA6PsnlcjhTGsqtBocdcVct7n2e)。表内为默认空白页、`TEST_SUMMARY`和18个业务子表；`TEST_SUMMARY`为18行×14列，PD03为111条数据行×22列A:V，云端回读通过。生产固定结果表、Feedback表和紫鸟/ZClaw后端均未写入。
+- 本地证据：`outputs/daily_runs/2026-09-10/20260910_083515_weekly_bundle.json`、`outputs/daily_runs/2026-09-10/20260910_083515_weekly_summary.json`、`outputs/frontend_online_tests/20260910_083515/{manifest.json,all_original_report.json,original_runs/20260910_083515.log}`。由于全量仍有技术异常和身份错配，本结果是实时规则/链路验收证据，不是生产合并通过证据。
 
 ## 2026-09-09 Feedback固定结果子表注册与表头回读（最新）
 

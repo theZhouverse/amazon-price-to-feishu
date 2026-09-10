@@ -89,7 +89,8 @@
 - [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，`From the brand`品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列均判定`fail`并记录ASIN不合法；删除泛化`eco`，规则版本升级为`2026-09-09-v10`。
 - [x] 用历史离线HTML完成各站点/布局的选择器覆盖清单和前端反例回归；离线样本只用于规则验证，不能替代当次实时页面结果。紫鸟/ZClaw实时US/CA采集由后端/发布分支负责，不作为本分支前端完成条件。
 - [x] 依据业务反馈调整可见列：前端七列改为`✅`/`❌`/`-`，详细`pass/fail/unknown/not_applicable`仅保留在bundle；时间戳和Amazon链接移动到U/V最后两列，并同步旧A:P/A:O迁移逻辑。
-- [x] 前端隔离在线表验收：先完成`PD03`单子表，再完成全部18个业务子表；独立测试表写后逐范围回读通过。结果表链接和统计见`docs/REVIEWS.md`的“2026-09-10 前端隔离在线表测试”，生产结果表未写入。
+- [x] 原“前端隔离在线表验收”已确认仅使用历史离线HTML，不能作为实时验收依据；其结果保留作选择器回归证据，不再作为线上前端完成证明。
+- [x] 前端实时隔离验收：已按原入口`app/run.py --weekly-run --dry-run --force-fetch`（单表门禁另加`--sheets PD03 --limit 1`）逐行打开实际商品链接，由原流程内部复用`run_fetch`/`AmazonBrowser`完成同页七项检查；原bundle已写入新测试表并逐范围回读。不得另起独立浏览器/CDP路径，生产结果表未写入。历史HTML只作fixture。全量结果和技术异常明细见`docs/REVIEWS.md`的“2026-09-10 原入口实时全量结果”；异常存在，所以此项完成的是实时验证执行，不代表生产合并批准。
 - [ ] 后端/发布分支完成A:V真实最小批云端写入回读、两个店铺Seller Central只读分页和全量验收后，再按统一发布门验收；该项不阻断本分支前端规则、离线回放和本地bundle完成。
 
 ## 2026-09-07 临时全量补跑：seq-4（15:48 启动）
