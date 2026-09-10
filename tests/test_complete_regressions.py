@@ -108,7 +108,7 @@ class PageSnapshotTests(unittest.TestCase):
             {'url': 'https://www.amazon.ca/dp/B000000002', 'title': 'B', 'html': PRICE, 'postal': 'M5V3A8', 'asin': 'B000000002'}]
         with patch('amazon.crawler.time.sleep'):
             cr = c.b.fetch_once(tab, c.row, c.cfg)
-        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertEqual(cr.status, PageStatus.IDENTITY_MISMATCH)
         self.assertIn('identity_mismatch', cr.error)
 
     def test_current_page_postal_is_rechecked(self):
@@ -124,6 +124,14 @@ class PageSnapshotTests(unittest.TestCase):
         c = self.setup_browser()
         self.assertFalse(c.b._postal_matches('Toronto M5V 3A9'))
         self.assertTrue(c.b._postal_matches('Toronto M5V 3A…'))
+
+    def test_identity_mismatch_is_blocked_but_not_counted_as_browser_failure(self):
+        mismatch = CrawlResult(asin='B000000001', status=PageStatus.IDENTITY_MISMATCH,
+                               error='identity_mismatch: 请求 B000000001，最终页面 B000000002')
+        parse = CrawlResult(asin='B000000002', status=PageStatus.PARSE_ERROR)
+        logger = Mock()
+        self.assertEqual(main.summarize(
+            {'CPD03': [mismatch, parse]}, {'max_error_ratio_for_push': 0.1}, logger), 0.5)
 
 class PublicationTests(unittest.TestCase):
     def setUp(self):
@@ -275,6 +283,8 @@ class FullReadAndNotificationTests(unittest.TestCase):
             rows, invalid = read_source_rows(values, {**CFG, 'source_marketplace': 'CA'})
             self.assertEqual([r.asin for r in rows], ['B000000001'])
             self.assertFalse(invalid)
+            self.assertTrue(rows[0].source_product_url.startswith('https://www.amazon.ca/dp/B000000001'))
+            self.assertEqual(rows[0].product_url, rows[0].source_product_url)
 
     def test_record_age_cannot_be_extended_by_rewriting_metadata(self):
         cfg = {'cache_max_age_hours': 12}
@@ -319,5 +329,16 @@ class FullReadAndNotificationTests(unittest.TestCase):
             text = 'Hi，有个任务完成请查收.\n写入行：1'
             for _ in range(2): main._notify_run_collaborators(fc, {'feishu_manager_open_id': 'manager'}, Mock(), 'r', text, Path(temp))
             self.assertEqual([c.args[0] for c in fc.send_post_message.call_args_list], ['manager', 'viewer', 'viewer'])
+
+    def test_manager_only_notification_does_not_discover_collaborators(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fc = Mock()
+            fc.application_collaborators.return_value = ['manager', 'viewer']
+            fc.send_post_message.return_value = 'message'
+            main._notify_run_collaborators(
+                fc, {'feishu_manager_open_id': 'manager'}, Mock(), 'r',
+                'Hi，有个任务完成请查收.', Path(temp), manager_only=True)
+            fc.application_collaborators.assert_not_called()
+            self.assertEqual([c.args[0] for c in fc.send_post_message.call_args_list], ['manager'])
 
 if __name__ == '__main__': unittest.main()

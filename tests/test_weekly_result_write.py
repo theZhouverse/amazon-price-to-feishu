@@ -157,6 +157,15 @@ class WeeklyResultWriteTest(unittest.TestCase):
         self.assertEqual(report['written_rows'], 0)
         self.assertEqual(report['blocked'][0]['reason'], 'currency_error')
 
+    def test_identity_mismatch_is_not_written(self):
+        fc = FakeFeishu()
+        cr = result('B000000001', status=PageStatus.IDENTITY_MISMATCH, archive=False)
+        cr.error = 'identity_mismatch: 请求 B000000001，最终页面 B000000002'
+        report = write_weekly_result_columns(
+            fc, manifest(), 'run1', {'PD03': [cr]}, {'html_archive_required': False})
+        self.assertEqual(report['written_rows'], 0)
+        self.assertIn('identity_mismatch', report['blocked'][0]['reason'])
+
     def test_silent_write_failure_is_blocked_not_counted(self):
         fc = FakeFeishu()
         fc.write_values = lambda *args: None

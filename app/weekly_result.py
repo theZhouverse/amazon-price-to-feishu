@@ -219,7 +219,8 @@ def _publish_price_rows(fc, store, manifest, plans, results, run_id, checkpoint)
         grid = [RESULT_HEADERS + ['']]
         for index, (row, base) in enumerate(zip(plan['rows'], plan['values']), start=3):
             cr = by_asin[row.asin]
-            if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR):
+            if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
+                             PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR):
                 blocked.append({'sheet': title, 'asin': row.asin, 'reason': cr.error or cr.status.value})
                 # Never carry old prices onto new or reordered source rows.
                 price = ['', '-', '', '', '-', cr.timestamp,
@@ -387,7 +388,8 @@ def write_weekly_result_columns(fc, manifest: dict, run_id: str,
                 blocked.append({'sheet': sheet, 'asin': cr.asin,
                                 'reason': 'currency_error'})
                 continue
-            if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.PARSE_ERROR):
+            if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
+                             PageStatus.PARSE_ERROR):
                 blocked.append({'sheet': sheet, 'asin': cr.asin,
                                 'reason': cr.error or cr.status.value})
                 continue

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from product_links import MARKETPLACES, ProductLinkError, audit_manifest_links, normalize_product
+from product_links import (MARKETPLACES, ProductLinkError, audit_manifest_links,
+                            normalize_product, source_product_url)
 from unittest.mock import Mock
 
 
@@ -24,6 +25,18 @@ class TestProductLinks(unittest.TestCase):
         value = [{'type': 'mention', 'text': '商品',
                   'link': 'https://amazon.ca/dp/B0ZZZZZZ99'}]
         self.assertEqual(normalize_product(value, 'CA')[0], 'B0ZZZZZZ99')
+
+    def test_source_url_preserves_variant_query_after_validation(self):
+        value = '=HYPERLINK("https://www.amazon.ca/dp/B0ZZZZZZ99?th=1&psc=1","商品")'
+        self.assertEqual(
+            source_product_url(value, 'CA', 'B0ZZZZZZ99'),
+            'https://www.amazon.ca/dp/B0ZZZZZZ99?th=1&psc=1')
+
+    def test_source_url_rejects_asin_mismatch(self):
+        with self.assertRaises(ProductLinkError) as ctx:
+            source_product_url('https://www.amazon.ca/dp/B0ZZZZZZ99?th=1',
+                               'CA', 'B0ABCDEF12')
+        self.assertEqual(ctx.exception.reason, 'asin_mismatch')
 
     def test_rejects_malicious_and_cross_marketplace(self):
         for value, reason in [

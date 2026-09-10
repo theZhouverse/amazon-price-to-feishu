@@ -4,6 +4,12 @@ from __future__ import annotations
 from datetime import datetime
 
 INSTRUCTIONS_URL = 'https://wit0jhu6kvu.feishu.cn/wiki/G531wP7WNiepV3krnrHcavqin6d'
+_COMPLETION_PREFIXES = (
+    'Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；',
+    # Keep historical hand-written/recovery messages renderable while all
+    # production completion_text calls use the new wording above.
+    'Hi，有个任务完成请查收.',
+)
 
 
 def display_period(period_id: str, run_id: str) -> str:
@@ -31,9 +37,7 @@ def completion_text(*, period_id: str, run_id: str, started_at: str,
                     result_url: str, local_data: str,
                     error_ratio: float | None = None) -> str:
     lines = [
-        'Hi，有个任务完成请查收.',
-        '',
-        'Amazon 周报前端价格捕捉任务',
+        'Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；',
         '',
         f'周期：{display_period(period_id, run_id)}', f'运行编号：{run_id}',
         f'开始：{started_at.replace("T", " ")}', f'结束：{finished_at.replace("T", " ")}',
@@ -49,10 +53,38 @@ def completion_text(*, period_id: str, run_id: str, started_at: str,
     return '\n'.join(lines)
 
 
+def _compact_completion_text(text: str) -> str:
+    """Return the collaborator-safe completion variant.
+
+    The manager receives operational timings and the local evidence path.  All
+    other application collaborators receive only the result-table and fixed
+    instructions links, so private paths and run statistics are not disclosed.
+    Non-completion/error text is returned unchanged for backwards compatibility.
+    """
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith(_COMPLETION_PREFIXES[0]):
+        return text
+    result_index = next((i for i, line in enumerate(lines)
+                         if line.startswith('结果表：')), None)
+    instruction_index = next((i for i, line in enumerate(lines)
+                              if line.startswith('说明文档：')), None)
+    if result_index is None or instruction_index is None:
+        # Fail closed if a malformed completion body cannot be reduced safely.
+        return '\n'.join([lines[0], '', '结果表：', '说明文档：'])
+    compact = [lines[0], '']
+    compact.append(lines[result_index])
+    if result_index + 1 < len(lines) and lines[result_index + 1].startswith('https://'):
+        compact.append(lines[result_index + 1])
+    compact.extend(['', lines[instruction_index]])
+    return '\n'.join(compact)
+
+
 def recipient_text(text: str, open_id: str, local_data_open_id: str = '') -> str:
-    """Fail closed: only the configured manager receives the local data line."""
+    """Select the manager-full or collaborator-compact completion template."""
     if local_data_open_id and open_id == local_data_open_id:
         return text
+    if text.startswith(_COMPLETION_PREFIXES[0]):
+        return _compact_completion_text(text)
     return '\n'.join(line for line in text.splitlines()
                      if not line.lstrip().startswith(('本地数据:', '本地数据：')))
 
@@ -84,7 +116,7 @@ def send_to_recipients(fc, recipients: list[str], text: str, *, local_data_open_
     for open_id in dict.fromkeys(x for x in recipients if x):
         try:
             body = recipient_text(text, open_id, local_data_open_id)
-            if body.startswith('Hi，有个任务完成请查收.'):
+            if body.startswith(_COMPLETION_PREFIXES):
                 message_id = fc.send_post_message(open_id, completion_post(body))
             else:
                 message_id = fc.send_text_message(open_id, body)

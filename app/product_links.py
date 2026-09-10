@@ -106,6 +106,28 @@ def normalize_product(value, marketplace: str) -> tuple[str, str]:
     raise ProductLinkError('asin_not_found', '未提取到合法 B0 ASIN')
 
 
+def source_product_url(value, marketplace: str, expected_asin: str | None = None) -> str:
+    """返回经过同一域名/ASIN校验的源链接（保留原始查询参数）。
+
+    周报中的 `?th=1`、`?psc=1` 或变体上下文不能在读取时无声丢弃。
+    该函数只返回已通过 Marketplace 校验的 Amazon 链接；没有显式 URL
+    时返回空字符串，调用方应回退到标准 `/dp/{asin}`。
+    """
+    profile = MARKETPLACES.get(str(marketplace).upper())
+    if not profile:
+        raise ProductLinkError('unknown_marketplace', f'未知 Marketplace: {marketplace}')
+    expected = (expected_asin or '').upper()
+    for part in _flatten(value):
+        for raw_url in URL_RE.findall(part):
+            url = raw_url.rstrip(').,;')
+            asin = _asin_from_url(url, profile)
+            if expected and asin.upper() != expected:
+                raise ProductLinkError(
+                    'asin_mismatch', f'商品链接 ASIN {asin} 与 ASIN 列 {expected} 不一致')
+            return url
+    return ''
+
+
 def safe_preview(value, limit: int = 100) -> str:
     """审计报告只保留类型与截断文本，不输出 Cookie 等页面内容。"""
     text = ' | '.join(_flatten(value))
@@ -144,7 +166,9 @@ def audit_manifest_links(fc, manifest: dict) -> dict:
                     continue
                 try:
                     asin, url = normalize_product(value, marketplace)
+                    source_url = source_product_url(value, marketplace, asin)
                     valid.append({'row': offset, 'asin': asin, 'product_url': url,
+                                  'source_product_url': source_url,
                                   'source_type': type(value).__name__})
                 except ProductLinkError as exc:
                     preview = safe_preview(value)

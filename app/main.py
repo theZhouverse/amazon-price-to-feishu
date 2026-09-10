@@ -128,6 +128,8 @@ def parse_args() -> argparse.Namespace:
                     help='从正式快照初始化/同步独立结果表 A:G（必须 --confirm）')
     ap.add_argument('--weekly-run', action='store_true',
                     help='新批次复制最新周报；刷新固定结果表A:G和H:O')
+    ap.add_argument('--notify-manager-only', action='store_true',
+                    help='本次正式运行只通知 feishu_manager_open_id；不改变默认协作者范围')
     ap.add_argument('--weekly-push-only', action='store_true',
                     help='用当前有效weekly-run结果恢复固定表A:O（必须 --run-id --confirm）')
     ap.add_argument('--amazon-poc-marketplace', choices=('US', 'CA'), default=None,
@@ -212,6 +214,8 @@ def parse_args() -> argparse.Namespace:
     if args.weekly_run and not (args.dry_run or args.fetch_only or args.limit or args.asins) \
             and not args.confirm:
         raise SystemExit('--weekly-run 正式写入独立结果表时必须同时提供 --confirm')
+    if args.notify_manager_only and not args.weekly_run:
+        raise SystemExit('--notify-manager-only 只能与 --weekly-run 同用')
     if args.weekly_push_only and (not args.run_id or not args.confirm):
         raise SystemExit('--weekly-push-only 必须同时提供 --run-id 和 --confirm')
     if args.weekly_push_only and (
@@ -250,6 +254,7 @@ def row_from_dict(d: dict) -> ReportRow:
         target_price_source=d.get('target_price_source') or 'missing',
         marketplace=d.get('marketplace') or 'US',
         product_url=d.get('product_url') or '',
+        source_product_url=d.get('source_product_url') or '',
     )
 
 
@@ -375,12 +380,15 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
                             finally:
                                 cr.duration_ms = int(
                                     (time.monotonic() - item_started) * 1000)
-                        if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR) \
+                        if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
+                                         PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR) \
                                 or cr.archive_status == 'failed':
                             save_evidence(run_id, sheet, cr, tab, cfg)
                     except Exception as e:
                         cr = CrawlResult(asin=row.asin, marketplace=row.marketplace,
-                                         product_url=row.product_url)
+                                         product_url=row.product_url,
+                                         source_product_url=getattr(
+                                             row, 'source_product_url', ''))
                         cr.run_id = run_id
                         cr.status = PageStatus.CRAWL_ERROR
                         cr.error = f'{type(e).__name__}: {str(e)[:80]}'
@@ -461,7 +469,8 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
 # ============================ 汇总 ============================
 def summarize(results_by_sheet: dict[str, list[CrawlResult]], cfg: dict, logger) -> float:
     """返回技术异常比例（crawl_error + parse_error）/ 抓取行总数。
-    source_data_invalid 单列，不参与一致性与技术异常分母（4.x）。"""
+    source_data_invalid 单列；identity_mismatch 是严格阻断的源链接/站点
+    重定向状态，不伪装为浏览器或网络技术异常。"""
     st = Counter()
     mt = Counter()
     dt = Counter()
@@ -1097,15 +1106,19 @@ def _rename_run_result(fc, store, manifest, run_id):
         atomic_json(store.root / 'fixed_result.json', {**fixed, 'name': title})
 
 
-def _notify_run_collaborators(fc, cfg, logger, run_id, text, out):
+def _notify_run_collaborators(fc, cfg, logger, run_id, text, out,
+                              manager_only: bool = False):
     from result_notification import send_to_recipients
     discovery_error = ''
-    try:
-        recipients = fc.application_collaborators()
-    except Exception as exc:
-        recipients = []
-        discovery_error = str(exc)
-    recipients.append(cfg.get('feishu_manager_open_id', ''))
+    if manager_only:
+        recipients = [cfg.get('feishu_manager_open_id', '')]
+    else:
+        try:
+            recipients = fc.application_collaborators()
+        except Exception as exc:
+            recipients = []
+            discovery_error = str(exc)
+        recipients.append(cfg.get('feishu_manager_open_id', ''))
     # Changing timestamps alone must not resend the same business result on recovery.
     semantic = '\n'.join(line for line in text.splitlines() if not line.startswith(
         ('开始：', '结束：', '完整耗时：', '本地数据：')))
@@ -1131,7 +1144,8 @@ def _notify_run_collaborators(fc, cfg, logger, run_id, text, out):
     report.update(run_id=run_id, discovery_error=discovery_error,
                   sent_at=datetime.now().isoformat())
     atomic_json(path, report)
-    p(logger, f'[通知] 应用协作者成功 {len(report["sent"])} 人，失败 {len(report["failed"])} 人；记录 {path}')
+    scope_label = '仅管理员' if manager_only else '应用协作者'
+    p(logger, f'[通知] {scope_label}成功 {len(report["sent"])} 人，失败 {len(report["failed"])} 人；记录 {path}')
     if discovery_error or report['failed']:
         p(logger, '[通知未完全送达] ' + json.dumps(report['failed'], ensure_ascii=False) + discovery_error)
         # Delivery failures are recorded separately from the completed data write.
@@ -1180,7 +1194,9 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
         profile = MARKETPLACES[marketplace]
         for row in plan['rows']:
             row.marketplace = marketplace
-            row.product_url = profile.product_url(row.asin)
+            # 保留周报中经过校验的原始链接（含必要的变体查询参数）；
+            # 只有纯 ASIN 或无效/缺失链接时才回退标准 /dp/ASIN。
+            row.product_url = row.product_url or profile.product_url(row.asin)
     if args.asins:
         wanted = {item.strip() for item in args.asins.split(',') if item.strip()}
         rows_by_sheet = {sheet: [row for row in rows if row.asin in wanted]
@@ -1231,7 +1247,9 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
         except Exception as exc:
             crawls = [CrawlResult(asin=row.asin, run_id=run_id, status=PageStatus.CRAWL_ERROR,
                                  error=f'子表抓取失败: {exc}', marketplace=row.marketplace,
-                                 product_url=row.product_url) for row in rows]
+                                 product_url=row.product_url,
+                                 source_product_url=getattr(row, 'source_product_url', ''))
+                      for row in rows]
         results_by_sheet[sheet] = crawls
         save_bundle()
         try:
@@ -1247,6 +1265,7 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
                              discount_type='-', marketplace=row.marketplace,
                              currency_code=('CAD' if row.marketplace == 'CA' else 'USD'),
                              product_url=row.product_url,
+                             source_product_url=getattr(row, 'source_product_url', ''),
                              timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             results_by_sheet.setdefault(sheet, []).append(cr)
     if not args.asins and not args.limit:
@@ -1283,7 +1302,8 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
             error_ratio=error_ratio, result_name=manifest['result']['name'],
             result_url=manifest['result']['url'], local_data=str(bundle_path))
         text = _delivery_notice(text, report)
-        _notify_run_collaborators(fc, cfg, logger, run_id, text, out)
+        _notify_run_collaborators(fc, cfg, logger, run_id, text, out,
+                                  manager_only=bool(getattr(args, 'notify_manager_only', False)))
 
 
 def _price_run_id(store, period_id, args):

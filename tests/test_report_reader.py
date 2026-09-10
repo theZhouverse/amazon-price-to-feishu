@@ -84,6 +84,14 @@ class TestReadSourceRows(unittest.TestCase):
         self.assertEqual(invalid[0]['asin'], 'B0XYZ12345')
         self.assertIn('目标成交价', invalid[0]['reason'])
 
+    def test_asin_header_with_annotation_is_read_consistently(self):
+        data = pd05_layout()
+        data[1][0] = 'ASIN\n(颜色/变体说明)'
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].asin, 'B0CCP1R78Z')
+        self.assertEqual(len(invalid), 1)
+
     def test_i_value_percent_string(self):
         data = pd03_layout()
         data[2][8] = '20%'                                # I 列 '20%' → 0.20

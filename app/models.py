@@ -13,6 +13,7 @@ class PageStatus(str, Enum):
     PAGE_NOT_FOUND = 'page_not_found'  # 明确 404
     SOLD_OUT = 'sold_out'            # 页面存在但无价格，业务归类售罄
     CRAWL_ERROR = 'crawl_error'      # 技术异常：captcha/blocked/超时/空白/通信失败
+    IDENTITY_MISMATCH = 'identity_mismatch'  # 已加载但请求ASIN被站点重定向为其他商品
     PARSE_ERROR = 'parse_error'      # 页面正常但无法按规则解析（冲突/结构变化）
     CURRENCY_ERROR = 'currency_error'  # Marketplace/币种未知或不一致，禁止价格比较
     SOURCE_INVALID = 'source_data_invalid'  # 源数据无效（E/K 为空），不抓取，六列输出 '-'
@@ -46,6 +47,7 @@ class ReportRow:
     target_price_source: str = TARGET_SOURCE_MISSING   # 来源追踪
     marketplace: str = 'US'
     product_url: str = ''
+    source_product_url: str = ''
 
     def as_dict(self) -> dict:
         return {
@@ -56,6 +58,7 @@ class ReportRow:
             'target_price': str(self.target_price) if self.target_price is not None else None,
             'target_price_source': self.target_price_source,
             'marketplace': self.marketplace, 'product_url': self.product_url,
+            'source_product_url': self.source_product_url,
         }
 
 
@@ -104,6 +107,7 @@ class CrawlResult:
     marketplace: str = 'US'
     currency_code: str = ''
     product_url: str = ''
+    source_product_url: str = ''
     location_verified: bool = False
     risk_cooldown_seconds: float = 0.0
     html_path: str = ''
@@ -159,7 +163,9 @@ class CrawlResult:
             'page_url': self.page_url, 'page_title': self.page_title,
             'duration_ms': self.duration_ms,
             'marketplace': self.marketplace, 'currency_code': self.currency_code,
-            'product_url': self.product_url, 'location_verified': self.location_verified,
+            'product_url': self.product_url,
+            'source_product_url': self.source_product_url,
+            'location_verified': self.location_verified,
             'risk_cooldown_seconds': self.risk_cooldown_seconds,
             'html_path': self.html_path, 'html_url': self.html_url,
             'html_sha256': self.html_sha256, 'html_size_bytes': self.html_size_bytes,

@@ -215,6 +215,7 @@ def _crawl_from_dict(d: dict) -> CrawlResult | None:
     cr.marketplace = d.get('marketplace') or ''
     cr.currency_code = (d.get('currency_code') or '').upper()
     cr.product_url = d.get('product_url') or ''
+    cr.source_product_url = d.get('source_product_url') or ''
     cr.location_verified = bool(d.get('location_verified'))
     cr.risk_cooldown_seconds = float(d.get('risk_cooldown_seconds') or 0)
     cr.html_path = d.get('html_path') or ''

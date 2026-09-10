@@ -8,6 +8,8 @@ from weekly_mapping import build_discovery, classify_sheet, find_asin_header, va
 class TestWeeklyMapping(unittest.TestCase):
     def test_header_detection_and_routes(self):
         self.assertEqual(find_asin_header([['x'], ['SKU', 'ASIN']]), (2, 2))
+        self.assertEqual(find_asin_header([['x'], ['ASIN\n(颜色/变体说明)', 'SKU']]), (2, 1))
+        self.assertIsNone(find_asin_header([['ASIN_CODE', 'SKU']]))
         self.assertEqual(classify_sheet('CPD03', True)[0], 'CA')
         self.assertEqual(classify_sheet('PD03', True)[0], 'US')
         self.assertEqual(classify_sheet('说明', False)[0], 'excluded')

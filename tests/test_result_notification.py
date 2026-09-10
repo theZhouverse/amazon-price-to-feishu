@@ -12,7 +12,7 @@ class ResultNotificationTest(unittest.TestCase):
             started_at='07:00', finished_at='07:51', elapsed_seconds=3088.39,
             sheet_count=18, written_rows=622, blocked_count=103, error_ratio=.149,
             result_name='Result', result_url='https://example.com/sheet', local_data='D:/bundle.json')
-        self.assertTrue(text.startswith('Hi，有个任务完成请查收.\n\nAmazon 周报前端价格捕捉任务\n'))
+        self.assertTrue(text.startswith('Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；\n\n周期：'))
         self.assertIn('本地数据：D:/bundle.json', text)
         self.assertIn('G531wP7WNiepV3krnrHcavqin6d', text)
         self.assertIn('阻断行：103', text)
@@ -38,6 +38,9 @@ class ResultNotificationTest(unittest.TestCase):
         self.assertIn('D:/private.json', json.dumps(manager_post))
         self.assertNotIn('private.json', json.dumps(other_post))
         self.assertNotIn('本地数据', json.dumps(other_post, ensure_ascii=False))
+        self.assertNotIn('周期：', json.dumps(other_post, ensure_ascii=False))
+        self.assertNotIn('运行编号：', json.dumps(other_post, ensure_ascii=False))
+        self.assertNotIn('写入行：', json.dumps(other_post, ensure_ascii=False))
         links = [node for row in other_post['zh_cn']['content'] for node in row if node['tag'] == 'a']
         self.assertEqual(links[0], {'tag': 'a', 'text': 'Result', 'href': 'https://example.com/sheet'})
         self.assertEqual(links[1]['text'], '关于上述表格的简要说明')

@@ -1,0 +1,45 @@
+# === 版本控制 & 编辑器 ===
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+
+# === Python 环境 ===
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# === 运行时数据（不进入镜像，通过卷挂载） ===
+outputs/
+data/
+htmls/
+tmp/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# === 本地凭证和环境 ===
+.env
+.env/**
+.env.local
+.env.*.local
+config/config.local.json
+
+# === 测试 & 工具 ===
+sandbox/
+node_modules/
+tests/
+htmlcov/
+.coverage
+
+# === Docker 自身 ===
+deploy/docker/volumes/

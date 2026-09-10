@@ -1,12 +1,108 @@
 # TASKS: Amazon Daily
 
+## 2026-09-10 通知模板按收件人分级
+
+- [x] 将生产完成通知统一改为“Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；”。周成业收到完整运行统计和本地数据，其他应用协作者仅收到结果表与固定说明文档链接；HTML端口行、本地路径（非管理员）和旧标题均不出现在正式消息中。
+- [x] 发送模板测试给周成业和陈家俊，两个接口回执均为`SENT`；回执见`outputs/notification_tests/20260910_template_test.json`。测试不代表正式任务执行，也未写入飞书结果表。
+- [x] 定向通知单元测试8/8通过；全量离线回归272/272通过（2026-09-10，测试进程约1.36秒）。兼容历史手工通知前缀，避免恢复/审计测试退化。
+- [ ] 下一次正式15:30批次核对两种正文实际送达：周成业完整版、其他协作者精简版；分别检查结果表/说明文档链接、统计字段和本地数据可见性，并记录真实`run_id`及墙钟耗时。
+
+## 2026-09-08 生产目录与开发目录隔离
+
+> 生产根目录正在被Windows任务计划程序使用；本节用于防止后续本地改动直接影响正在运行的代码。
+
+- [x] 发现并确认`D:\projects\amazon_daily`是指向生产根目录`D:\projects\amazon_daily_structured_20260821`的Windows Junction，不是独立副本；以后禁止在该路径开发。
+- [x] 创建独立开发副本`D:\projects\amazon_daily_dev_20260821`，基于当前Git工作区复制代码和文档，排除生产`.env`、`outputs`、`htmls`、`data`、`tmp`、`.venv`、`.workbuddy`和`.codex`；开发副本未安装Windows计划任务。
+- [ ] 为调度入口增加稳定的`scheduled_slot`参数/环境变量，不能用实际启动时间推断周一07:30与周一15:30；覆盖StartWhenAvailable延迟补跑和人工启动场景。
+- [ ] 增加发布前真实路径校验：解析开发路径、生产路径和Junction/符号链接，路径相同或解析后相同必须拒绝；发布白名单不得包含`.env`、`outputs`、`htmls`、`data`、`.venv`。
+- [ ] 增加生产发布脚本和回滚证据：取得运行锁、确认没有价格进程、备份到`outputs/code_backups/{release_id}`、复制并校验代码文件、保留生产运行产物，发布失败自动停止而不是覆盖运行状态。
+- [ ] 开发副本先完成离线回归和只读飞书检查；通过后再人工批准发布到生产目录。开发副本不得执行正式`--weekly-run --confirm`、不得安装/修改`AmazonDaily_0730/1530`。
+- [ ] 为正式`weekly-run`与旧兼容入口增加布局路由门禁：日常任务只能调用A:O（后续A:U）发布器，旧`sync_base_data`/`write_six_columns`不得写入固定结果表；补充误调用回归并在发布前回读表头。
+
+## 2026-09-08 换周时点：周一早间沿用上周、周一下午切换本周
+
+> 本节已将用户确认的时段规则写入SPEC；代码和真实调度验收尚未因文档更新而自动完成。实现前不得把当前入口仍按“每次选择最新链接”的行为描述为已符合本规则。
+
+- [x] 明确业务规则：周一07:30使用上一周已经固化的`period_id`/manifest/完整快照；周一15:30重新读取登记表并切换到更高的最新有效序号；周二至周五07:30/15:30沿用周一15:30确认的本周周期。
+- [x] 更新`docs/SPEC.md`第1、1.1、16、16.1、18.1、19.2、19.3节，补充来源选择、快照创建/复用、失败回退和通知字段规则。
+- [ ] 在代码中增加时段感知的来源选择器，至少输出`source_period_id`、`selection_mode`（`monday_carryover`/`monday_switch`/`weekday_steady`）和登记行号；周一07:30禁止选择最新本周链接。
+- [ ] 调度器必须传入稳定的`scheduled_slot`（如`monday_0730`/`monday_1530`），补跑时保持原计划槽位；人工运行单独标记`manual`，不能用当前墙钟时间冒充自动时段。
+- [ ] 周一07:30实现上一周期manifest/快照存在性、结构和权限校验；缺失或不可读时安全停止，不读取可变原表，不回退到任意旧周期。
+- [ ] 周一15:30要求登记表出现比上一周期更高的有效序号并完成源Token、完整副本、结构校验和manifest固化；无新序号、复制504/超时、权限或结构失败时保留上一周固定结果并通知周成业。
+- [ ] 周二至周五保持本周周期不变；发现新的更高序号或同序号换URL时只登记`pending_period_change`并告警，不在非换周时点静默切换。
+- [ ] 更新运行通知、weekly bundle、summary、manifest和日志，明确记录执行时段、`source_period_id`、`selection_mode`、源快照Token（脱敏）及选择原因；周一早间通知明确“沿用上一周周报”，周一下午明确“已切换最新周报”。
+- [ ] 增加离线回归：登记表已有新旧两行时周一07:30选旧、周一15:30选新；无新行时下午安全停止；周二发现新行不自动切换；同序号换URL拒绝；断点恢复不改变已固化来源。
+- [ ] 完成真实验收：至少覆盖一个周一早间和同日周一下午批次、随后一个工作日早晚批次，分别记录run_id、source_period_id、selection_mode、固定表写入行数、阻断行数和完整耗时；通过后再将本节实现项勾选完成。
+
+## 2026-09-08 新增需求：前端检查与Feedback差评子任务
+
+> 本节是实施任务清单，SPEC中的新增内容目前只代表目标规格，不代表代码已经实现或云端已经验收。
+
+- [ ] 为商品结果表增加P:U六个固定列：图片与品牌故事图片是否存在、前端尺寸是否一致、BSR标志是否存在、父子ASIN发散检查、环保标志是否存在、Amazon's Choice标志是否存在；完成旧A:P布局向A:U的安全迁移、写前备份、写后整行回读和尾行清理。
+- [ ] 新增前端检查模型和bundle字段，统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致、币种错误等整页门禁时六项均为`unknown`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
+- [ ] 在同一商品页面DOM和同一浏览器Tab中完成六项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。
+- [ ] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice按互斥规则输出`pass`/`not_applicable`/`fail`。
+- [ ] 新增两个店铺Seller Central Feedback管理器的独立会话与凭证引用，分页筛选星级小于3的feedback，保留原始评论内容和code；不得与商品详情页评论、Review或Q&A混用。
+- [ ] 新增固定`Feedback差评汇总`子表身份登记；按店铺加feedback ID/code幂等合并，两个店铺共用一张子表，保留店铺字段，禁止按同名猜测Sheet或每次新建。
+- [ ] 保存Feedback分页、筛选、去重、写入和回读证据到`outputs/feedback/{run_id}/`；凭证、Cookie、Authorization不得落盘。单店铺失败继续另一店铺，价格结果不回滚，通知中单独报告Feedback状态。
+- [ ] 扩展weekly bundle、delivery、summary、notification和manifest统计：`frontend_checks_written`、六项检查状态计数、`feedback_rows_seen`、`feedback_rows_written`、每店铺状态和Feedback子表回读结果。
+- [ ] 增加离线回归：A:U表头/旧A:P迁移、六项检查正反例与unknown、身份门禁联动、同页复用、Feedback三页分页、低星筛选、重复合并、单店铺失败继续、凭证脱敏和通知统计。
+- [ ] 完成真实验收：US/CA最小商品样本、最小子表A:U写入回读、两个店铺Feedback只读分页、Feedback固定子表小批写入回读，再执行一次全量；每次记录run_id、起止时间、墙钟耗时、写入/阻断和各检查统计。
+- [ ] 实现前不得把新增列或Feedback写入飞书；不得把当前价格任务的历史HTML或旧检查值当作新增结果。实现后同步README、REVIEWS、操作手册/当前业务规则的跳转职责和部署配置说明。
+
+## 2026-09-07 临时全量补跑：seq-4（15:48 启动）
+
+- [x] 从周报链表 `HwxpwCnZ7iV1o5klIGbc8wJHnrd` 读取有效登记，选择当前最新有效周期 `seq-4`，源周报为 `DxPrsBw0Rh16TTtTymmcOpelnEg`；本批固定使用该源快照，不跨周期混写。
+- [x] 修复两处源表兼容性问题后完成18个业务子表（11个US、7个CA）的真实 Amazon 抓取；运行 `20260907_154854`，从15:48:54到17:44:42，调度墙钟 `6948.963s`（约115.82分钟），调度日志以 `END exit=0` 收口。
+- [x] 固定结果表继续复用同一 Spreadsheet Token `Epads8MQkhkuBctjl3lcqLUvnCg`，本批写入 H:O 366 行、基础 A:G 同步719行，353行进入阻断/恢复清单，云端写入无失败回报；结果表名称同步为 `Amazon周报前端价格捕捉_2026-W37_20260907_154854`。
+- [x] 本批状态为 `partial/degraded`：逐行状态 `ok=337`、`identity_mismatch=182`、`parse_error=139`、`crawl_error=32`、`source_data_invalid=29`；币种为 `USD=549`、`CAD=170`。技术异常率24.8%，未将异常行当作售罄或零价。
+- [x] 应用协作者通知8人成功、0人失败；通知回执与本地证据已落盘。HTML归档未参与本轮价格任务，历史HTML未删除。
+- [x] 证据：`outputs/daily_runs/2026-09-07/20260907_154854_weekly_bundle.json`、`20260907_154854_weekly_summary.json`、`20260907_154854_delivery.json`、`20260907_154854_notifications.json`、`outputs/scheduler_logs/2026-09-07_154853_310_2652.log`、`outputs/weekly_runs/seq-4/weekly_manifest.json`。
+
+## 2026-09-07 15:30 副本创建超时修复
+
+- [x] 定位实际失败边界：计划批次 `20260907_1530` 在 Amazon 抓取前创建周报副本时收到飞书 Drive `504 Gateway Timeout`；没有生成该批次抓取产物，固定结果表未被本批次改写，管理员异常通知已送达。
+- [x] 修复 `FeishuClient.copy_file` 的瞬态错误处理：对 408/429/5xx 和传输超时最多退避重试3次；每次重试前及最终失败前按精确名称回查根目录，若服务端已完成复制则复用唯一副本，避免重复创建周报快照。
+- [x] 加固 `bin/scheduled_run.ps1`：捕获调度包装器异常、保留 Python 退出码，并在 `finally` 中必写 `END` 行，避免 stderr traceback 使调度日志无法收口。
+- [x] 临时补跑在源快照发现阶段发现兼容性问题：`PD05` 的合法表头为 `ASIN\n(...)`，旧检测误报 `未知 Marketplace`；未进入 Amazon 抓取和固定结果写入。
+- [x] 修复 `find_asin_header`：兼容带换行/括号说明的 ASIN 表头，仍拒绝 `ASIN_CODE`；对临时快照只读验证为21张表、18张业务表映射、3张辅助表排除、0未知、0重名。
+- [x] 回归验证：新增“504后副本已存在可恢复”和“传输超时后重试成功”测试；快照相关10项测试通过，全量离线回归 `271/271` 通过，Python 编译和 `git diff --check` 待本轮命令复核。
+
+## 最新生产基线与迁移准备（2026-09-02）
+
+> 当前状态以本节为唯一交付结论。下方的 8 月阶段记录仅保留当时的实施证据；计划任务已于本轮在目标 Administrator 账户重新安装并回读，旧记录不替代本轮验收。
+
+- [x] 全新源快照全量实跑：`20260902_121541`，登记周期 `seq-3`，重新创建第5代周报快照（`Udylsp...Tnmf`）并继续写入同一个固定结果表（`Epads...LVnCg`）；18个子表、719行基础数据均处理完成。
+- [x] 本轮价格任务关闭HTML归档：`html_archive_enabled=false`，无HTML下载/写入，价格抓取与HTML保持独立。
+- [x] 全量结果（当时旧状态口径）：507 `ok`、178 `crawl_error`、29 `source_data_invalid`、5 `parse_error`；USD 549、CAD 170；H:O 已回读写入536行，183行进入阻断/恢复清单，批次状态 `partial`，完整耗时 3685.516 秒（约61.43分钟）。旧口径技术异常率为26.5%，不能把异常行当作售罄或零价。
+- [x] 状态纠偏：上述178条原标为`crawl_error`的记录均为最终ASIN与请求ASIN不一致。新增`identity_mismatch`独立状态，继续重建Tab重试和逐行阻断，但不再把源链接/站点重定向问题计入浏览器网络技术异常；诊断证据同样保存。
+- [x] 在线确认：US `B0DRKD4LQC`连续3次新Tab仍跳转到`B0BY1Z43FP`；CA `B0BNDLKP54`在邮编验证/CAD证据正常时仍跳转到`B0D9NT9JQN`。两者均证明为Amazon实际重定向/源映射缺失，不接受落地页面价格。证据在`outputs/poc_resources/r1_7_us_B0DRKD4LQC.json`、`r1_7_ca_B0BNDLKP54.json`。
+- [x] 一次性通知范围：本轮使用 `--notify-manager-only`，通知回执仅包含周成业1个 `open_id`，成功1、失败0；该参数不改变默认协作者名单，后续计划任务不带此参数即恢复原协作者通知。
+- [x] 证据：`outputs/daily_runs/2026-09-02/20260902_121541_weekly_bundle.json`、`20260902_121541_weekly_summary.json`、`20260902_121541_delivery.json`、`20260902_121541_notifications.json`、`outputs/snapshots/20260902_121541/source.json`。
+- [x] Docker PoC实机构建与短启动验收（2026-09-02）：Docker Desktop Linux 引擎启动后，`docker compose build --no-cache` 成功生成 `amazon-daily:latest`（Linux/amd64、约334.6MB，含 Chromium 151）；容器内编译通过，使用镜像依赖与Chromium、只读挂载完整源码的269项回归通过。Compose 短启动时入口配置成功加载18个子表、健康检查为`healthy`，随后已主动 `down`，未触发抓取、飞书写入或通知。发现 Compose `init: true` 与镜像 `tini` 重复包装后已移除前者并复测 PID 1 为`tini`、日志无重复包装警告。
+- [x] Windows计划任务目标账户重新安装并回读（2026-09-02）：以 `chinami-coui675\\administrator` 执行 `bin\\schedule.bat --install`，退出码0。`AmazonDaily_0730`、`AmazonDaily_1530`均为 `Ready`、`Hidden=True`、`Execute=wscript.exe`，参数为 `//B //NoLogo bin\\hidden_ps1.vbs bin\\scheduled_run.ps1`；触发器为周一至周五，下一次分别为 2026-09-03 07:30、2026-09-02 15:30，最近已运行任务返回码均为0。任务不经过可见 cmd/BAT 窗口。
+
+## 当前执行索引：源链接保留与导航结果防护（2026-09-02）
+
+- [x] 修复 `tab.get()` 返回 `False` 时仍继续读取页面的问题；现在直接记录 `navigation_failed` 并结束本次尝试，不解析旧 DOM。
+- [x] 修复 `doc_loaded()` 超时被静默忽略的问题；异常或显式返回 `False` 统一记录为 `navigation_timeout`，不再读取 `location.href`、价格或促销。
+- [x] 新增两项回归：导航失败不得调用 `run_js`，文档加载超时不得调用 `run_js`。
+- [x] 链接优化：源表合法URL保存为`source_product_url`并优先请求，保留`?th=1`/`?psc=1`等参数；源URL与ASIN不一致时拒绝，纯ASIN回退标准链接；快照、缓存和诊断均保留源链接与实际请求链接。
+- [x] 初始化兼容：Amazon 地址组件首次回读为`Update location`时，`setup()`最多重试3次、每次间隔2秒，连续失败才阻断。
+- [x] 验证：`PYTHONPATH=app; .venv\\Scripts\\python.exe -m unittest discover -s tests -p 'test_*.py'`，269/269 通过（命令耗时约1.4秒，含Docker打包、环境覆盖、身份不一致分类/写入门禁回归）；本条历史记录不替代真实在线验收。
+- [x] 在线单点：CA `B0D9NT9JQN` 通过，`amazon.ca`、CAD、邮编验证、最终 ASIN 一致，耗时约18.6秒；未写飞书。
+- [x] 在线单点：US `B0C5R56QTF` 首次两次遇到地址回读瞬态失败（`postal_input_not_found`/`postal_not_observed:Update location`），随后重试恢复；修改后再次实测 `amazon.com`、USD、90210 `visible_exact`、最终 ASIN 一致，商品耗时18.381秒，未写飞书。
+- [x] CPD批量只读验证（2026-09-02 11:58:43）：CPD03/17/05/25/39/33/52共170行，30 ok、130 identity_mismatch、1 parse_error、9 source_data_invalid；CAD=170，技术异常率81.4%，耗时约688.7秒，未写飞书。130条仍落到相邻有效ASIN，且本轮快照的170条`source_product_url`均为空，尚未验证真实周报原始链接参数的改善效果。
+- [x] 一次性通知范围：新增`--notify-manager-only`，仅对当前正式`--weekly-run`生效，不改变默认应用协作者名单；回归验证仅发送`feishu_manager_open_id`。
+- [ ] 下一步用 CPD03/CPD17 做真实源链接对照，逐行记录源链接、请求链接、最终URL/ASIN和耗时；并发只作为后续变量，不作为当前根因假设。
+
 ## 当前执行索引：无控制台调度修复（2026-09-02）
 
 - [x] 定位终端闪现原因：PowerShell的`-WindowStyle Hidden`只能隐藏内层PowerShell；若旧计划任务或人工入口先经过`cmd.exe`/BAT，外层控制台仍可能出现。
 - [x] 新增`bin/hidden_ps1.vbs`，使用GUI子系统`wscript.exe //B //NoLogo`启动隐藏、非交互PowerShell并等待原始退出码；`scheduled_run.bat`和`start_html_server.bat`同步改用该启动器（BAT被手工双击时外层cmd仍可能短暂闪现，计划任务不再经过BAT）。
 - [x] 更新`bin/schedule.ps1`：新安装的`AmazonDaily_0730/1530`直接执行`wscript.exe`，不再经过可见BAT/cmd窗口；PowerShell和Python仍保持原日志、锁和退出码链路。
 - [x] 验证：`schedule.ps1`、`scheduled_run.ps1` PowerShell语法通过，`git diff --check`通过；当前沙箱禁止CScript执行（Access denied），因此未将本机WScript运行视为已验收。
-- [x] 用户Windows主机已重新运行`bin\\schedule.bat --install`并只读回查：`AmazonDaily_0730`与`AmazonDaily_1530`均为`Ready`、`Hidden=True`、`Execute=wscript.exe`，参数指向`hidden_ps1.vbs`→`scheduled_run.ps1`；07:30最近一次退出码0，15:30下次按计划运行。旧的BAT/cmd任务定义已被替换。
+- [x] 历史阶段回读（2026-09-02早期环境）：曾在用户 Windows 主机回读到`AmazonDaily_0730`与`AmazonDaily_1530`为`Ready`、`Hidden=True`、`Execute=wscript.exe`，参数指向`hidden_ps1.vbs`→`scheduled_run.ps1`；旧的BAT/cmd任务定义已被替换。本轮已在目标账户重新安装并再次回读，当前启用状态以本文件顶部的本轮验收记录为准。
 
 ## 当前执行索引：9月1日兼容性修复（2026-09-01）
 
@@ -194,7 +290,7 @@
   - 依赖：Phase 0 完成
   - 输入：`https://wit0jhu6kvu.feishu.cn/wiki/HwxpwCnZ7iV1o5klIGbc8wJHnrd`
   - 实现：新增 `weekly_registry_url` 配置及 `--inspect-weekly-registry`；只读解析 Wiki 节点、底层 Spreadsheet Token、登记 Sheet ID、表头和有效行
-  - 规则：匹配实际 `序号/飞书链接/更新时间` 三列表；忽略链接为空的预留行，选择链接非空且序号最大的唯一行；没有新增链接时继续使用当前最大序号
+  - 历史R1.1规则：匹配实际 `序号/飞书链接/更新时间` 三列表；忽略链接为空的预留行，选择链接非空且序号最大的唯一行；没有新增链接时继续使用当前最大序号。该历史规则已被TASKS顶部的“周一早间沿用上周、周一下午切换本周”时点规则取代，不能直接作为当前调度实现依据。
   - 验证：覆盖富文本链接、普通链接、无有效行、非整数/重复序号、非法域名、无权限及最大序号无效但旧行有效；命令不产生任何飞书写入，也不故障回退
   - 文档：将实测 Spreadsheet Token、Sheet ID、字段名和权限结果回写 SPEC
   - 验证记录（2026-08-24）：首次环境运行因 PATH 无 Python 在 0.737s 内停止；补齐项目 `.venv` 后旧基线 66/66 通过（0.799s）。R1.1 初版定向测试 13/13（0.279s）、完整回归 76/76（0.539s）。真实表与草案结构不同，首次只读预检在 2.023s 安全停止；只读发现实际表头为 `序号/飞书链接/更新时间`，适配后定向测试 16/16（0.268s），真实只读预检通过：`Sheet1/c1fcd1`、有效链接序号 1、第 2 行、API 1.328s、命令总耗时 1.816s，全程无飞书写入；最终完整回归 79/79 通过（0.533s）。提交号待本阶段统一提交时补记。
