@@ -153,6 +153,34 @@ def _resolve_cols(header_row: list, cfg: dict) -> dict:
     return cols
 
 
+_FORMULA_TEXT_PREFIXES = ('=', 'IF(', '=IF(', 'IFNA(', '=IFNA(', 'INDEX(', '=INDEX(')
+
+
+def _resolve_source_size(raw_size, sku: str) -> str:
+    """Return a displayable source size instead of leaking BI lookup formulas.
+
+    Some weekly source cells contain a formula serialized without the leading
+    ``=``.  The result Spreadsheet intentionally does not copy the auxiliary
+    ``BI源数据`` tab, so forwarding that formula makes the result blank or
+    displays the formula text.  Product SKUs carry the same size token for the
+    supported weekly layouts; use it only for formula-like size cells and keep
+    already-evaluated source values unchanged.
+    """
+    raw = str(raw_size or '').strip()
+    if not raw.upper().startswith(_FORMULA_TEXT_PREFIXES):
+        return raw
+    value = str(sku or '').strip()
+    match = re.search(
+        r'(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)', value)
+    if match:
+        return f"{match.group(1)}'X{match.group(2)}'"
+    # One-dimensional rug SKUs use 8R, 10FT, or R10FT; the source display
+    # convention for these rows is simply 8' / 10'.
+    match = re.search(
+        r'(?i)(?:^|[-_])R?(\d+(?:\.\d+)?)(?:FT|R)(?:$|[-_])', value)
+    return f"{match.group(1)}'" if match else ''
+
+
 def read_source_rows(vals: list[list], cfg: dict,
                      source_kind: str = 'feishu') -> tuple[list[ReportRow], list[dict]]:
     """从 2D 单元格矩阵解析周报行（表头自动探测 + 列名定位 + target 本地兜底）。
@@ -180,10 +208,11 @@ def read_source_rows(vals: list[list], cfg: dict,
             if 'http' in str(asin_v).lower():
                 raise RuntimeError(f'源行{idx}商品链接无效: {exc}') from exc
             continue
+        sku = str(_cell(cols['sku']) or '').strip()
         rr = ReportRow(
             row_num=idx, asin=asin,
-            sku=str(_cell(cols['sku']) or '').strip(),
-            size=str(_cell(cols.get('size', 4)) or '').strip(),
+            sku=sku,
+            size=_resolve_source_size(_cell(cols.get('size', 4)), sku),
             normal_price=_num_or_none(_cell(cols['normal_price'])),
             h_type=str(_cell(cols['h_type']) or '').strip(),
             i_value=_parse_i_value(_cell(cols['i_value'])),

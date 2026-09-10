@@ -49,6 +49,17 @@ def pd05_layout():
 
 
 class TestReadSourceRows(unittest.TestCase):
+    def test_formula_size_text_is_resolved_from_sku(self):
+        data = pd03_layout()
+        data[2][3] = '=IF($A3="","",INDEX(\'BI源数据\'!A:A,1))'
+        data[3][3] = 'IF($A4="","",INDEX(\'BI源数据\'!A:A,1))'
+        data[2][1] = 'PPDD03-blackgray-5x8'
+        data[3][1] = 'PD17-greywhite-8R'
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertEqual(len(invalid), 0)
+        self.assertEqual(rows[0].size, "5'X8'")
+        self.assertEqual(rows[1].size, "8'")
+
     def test_pd03_layout_k_formula_local_fallback(self):
         rows, invalid = read_source_rows(pd03_layout(), mk_cfg())
         self.assertEqual(len(rows), 3)
