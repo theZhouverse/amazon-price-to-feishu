@@ -15,6 +15,7 @@ import random
 import re
 import threading
 import time
+from datetime import datetime
 from urllib.parse import urlsplit
 from amazon.price_evidence import observed_currency, explicitly_unavailable, Tree
 from decimal import Decimal
@@ -27,6 +28,12 @@ from amazon.parser import (
 )
 from amazon.selectors import (
     TITLE_404, TITLE_BLOCKED, TITLE_CAPTCHA,
+)
+from frontend_checks import (
+    FRONTEND_CHECK_RULE_VERSION,
+    inspect_frontend,
+    stamp_frontend_checks,
+    unknown_checks,
 )
 from models import CrawlResult, PageStatus, ReportRow
 from product_links import MARKETPLACES, MarketplaceProfile
@@ -363,6 +370,19 @@ class AmazonBrowser:
                 cr.status = PageStatus.CRAWL_ERROR
                 cr.error = 'location_unverified: 当前商品页面邮编不匹配'
                 return cr
+            # Price parsing and all seven frontend checks consume this same
+            # frozen DOM. No check is allowed to trigger another navigation.
+            cr.frontend_check_rule_version = FRONTEND_CHECK_RULE_VERSION
+            try:
+                cr.frontend_checks = inspect_frontend(
+                    sample['html'], row.size, row.asin,
+                    page_ready=True, page_status='ok', page_url=cr.page_url)
+            except Exception as exc:
+                # A selector failure is explicit unknown, never a fabricated
+                # pass and never a price crawl failure.
+                cr.frontend_checks = unknown_checks(
+                    f'前端检查解析失败: {type(exc).__name__}', page_url=cr.page_url)
+
             tree = Tree(sample['html'])
             cands = parse_main_price(tree)
             price, rule, ambiguous = select_main_price(cands, str(cfg['ambiguous_price_ratio']))
@@ -418,8 +438,13 @@ class AmazonBrowser:
                 cr.error = 'deadline_exceeded: 单 ASIN 总时间预算耗尽'
             cr.duration_ms = int((time.time() - t0) * 1000)
             if cr.timestamp == '':
-                from datetime import datetime
                 cr.timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if not cr.frontend_checks and cr.status.value in {
+                    'page_not_found', 'crawl_error', 'identity_mismatch',
+                    'currency_error', 'parse_error', 'source_data_invalid'}:
+                cr.frontend_checks = unknown_checks(
+                    f'页面门禁: {cr.status.value}', page_url=cr.page_url)
+            stamp_frontend_checks(cr.frontend_checks, cr.timestamp)
 
     def _page_looks_normal(self, tab, row: ReportRow) -> bool:
         """页面是否存在：title 非空、URL 含商品页特征、body 含 ASIN"""

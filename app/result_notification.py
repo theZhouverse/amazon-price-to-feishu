@@ -35,7 +35,15 @@ def completion_text(*, period_id: str, run_id: str, started_at: str,
                     finished_at: str, elapsed_seconds: float, sheet_count: int,
                     written_rows: int, blocked_count: int, result_name: str,
                     result_url: str, local_data: str,
-                    error_ratio: float | None = None) -> str:
+                    error_ratio: float | None = None,
+                    source_period_id: str = '', selection_mode: str = '',
+                    scheduled_slot: str = '', frontend_status_counts: dict | None = None,
+                    feedback_status: str = '') -> str:
+    # The snapshot flow passes source/slot/frontend/Feedback metadata.  The
+    # selected fix-codescan template intentionally keeps those details out of
+    # the user-facing body (the manager still receives the agreed run stats),
+    # but accepting the keywords keeps both flow versions compatible.
+    del source_period_id, selection_mode, scheduled_slot, frontend_status_counts, feedback_status
     lines = [
         'Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；',
         '',

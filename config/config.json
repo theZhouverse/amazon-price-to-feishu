@@ -19,7 +19,10 @@
   "html_server_enabled": false,
   "html_server_bind": "0.0.0.0",
   "html_server_port": 8765,
+  "feishu_auto_grant_generated_resources": true,
   "feishu_manager_open_id": "ou_68e7d2af96255c1eeb1eea8021c80ea4",
+  "feishu_generated_resource_member_type": "openid",
+  "feishu_generated_resource_perm": "full_access",
   "price_tolerance": "0.50",
   "ambiguous_price_ratio": "0.05",
   "cache_max_age_hours": 12,
@@ -79,5 +82,82 @@
     "最终价格",
     "一致性检查",
     "时间戳"
-  ]
+  ],
+  "feedback": {
+    "enabled": false,
+    "timezone": "Asia/Shanghai",
+    "initial_window_days": 7,
+    "incremental_window_days": 3,
+    "retention_days": 10,
+    "max_rating": 3,
+    "target_spreadsheet_token": "Epads8MQkhkuBctjl3lcqLUvnCg",
+    "target_sheet_id": "41u25y",
+    "target_sheet_name": "Feedback差评汇总",
+    "state_path": "outputs/feedback/feedback_state.json",
+    "evidence_root": "outputs/feedback",
+    "store_order": ["store_a", "store_b"],
+    "page_wait_min": 8.0,
+    "page_wait_max": 12.0,
+    "detail_wait_min": 8.0,
+    "detail_wait_max": 12.0,
+    "max_pages": 50,
+    "stores": [
+      {
+        "key": "store_a",
+        "store_id": "26782671389969",
+        "expected_store_identity": "26782671389969",
+        "identity_mode": "cli_store_context",
+        "page_date_order": "newest_first",
+        "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
+        "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
+        "selectors": {
+          "latest_feedback_marker": ".fbm-content.katal h3",
+          "store_identity_mode": "cli_store_context",
+          "store_identity_selector": "",
+          "row_selector": ".fbm-content.katal kat-table-row:not(.fb-detail-table-header)",
+          "date_selector": "kat-table-cell.col_order_date",
+          "rating_selector": "kat-table-cell.col_feedback_rating kat-star-rating",
+          "order_id_selector": "kat-table-cell.col_order_id kat-link",
+          "comment_selector": "kat-table-cell:nth-child(4)",
+          "feedback_id_selector": "",
+          "order_link_selector": "kat-table-cell.col_order_id kat-link",
+          "detail": {
+            "marker": "text:订单内容",
+            "order_id_selector": "data-test-id:order-id-label",
+            "order_item_number_selector": "label:订单商品编号",
+            "asin_selector": "label:ASIN",
+            "sku_selector": "label:SKU"
+          }
+        }
+      },
+      {
+        "key": "store_b",
+        "store_id": "26686718929338",
+        "expected_store_identity": "26686718929338",
+        "identity_mode": "cli_store_context",
+        "page_date_order": "newest_first",
+        "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
+        "secret_ref": "ZINIAO_CLI_KEYCHAIN_2026ZCY",
+        "selectors": {
+          "latest_feedback_marker": ".fbm-content.katal h3",
+          "store_identity_mode": "cli_store_context",
+          "store_identity_selector": "",
+          "row_selector": ".fbm-content.katal kat-table-row:not(.fb-detail-table-header)",
+          "date_selector": "kat-table-cell.col_order_date",
+          "rating_selector": "kat-table-cell.col_feedback_rating kat-star-rating",
+          "order_id_selector": "kat-table-cell.col_order_id kat-link",
+          "comment_selector": "kat-table-cell:nth-child(4)",
+          "feedback_id_selector": "",
+          "order_link_selector": "kat-table-cell.col_order_id kat-link",
+          "detail": {
+            "marker": "text:订单内容",
+            "order_id_selector": "data-test-id:order-id-label",
+            "order_item_number_selector": "label:订单商品编号",
+            "asin_selector": "label:ASIN",
+            "sku_selector": "label:SKU"
+          }
+        }
+      }
+    ]
+  }
 }

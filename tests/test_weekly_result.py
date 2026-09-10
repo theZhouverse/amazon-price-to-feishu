@@ -45,7 +45,7 @@ class FakeFeishu:
     def read_values(self, token, sid, rng):
         if token == 'snapshot':
             return self.source_values[sid]
-        if rng == 'A2:P2':
+        if rng == 'A2:V2':
             return [self.headers[sid]] if sid in self.headers else []
         if rng.startswith('A3:A'):
             return [[asin] for asin in self.asins.get(sid, [])]
@@ -64,9 +64,9 @@ class FakeFeishu:
 
     def write_values(self, token, sid, rng, values):
         self.writes.append((sid, rng, values))
-        if rng == 'A2:P2':
+        if rng == 'A2:V2':
             self.headers[sid] = list(values[0])
-        elif rng.startswith('A3:P'):
+        elif rng.startswith('A3:V'):
             self.asins[sid] = []
         elif rng.startswith('A3:G'):
             self.asins[sid] = [str(item[0]) for item in values]
@@ -116,8 +116,8 @@ class WeeklyResultTest(unittest.TestCase):
         result, manifest = self.run_sync(fc)
         self.assertEqual(result['row_count'], 2)
         self.assertEqual(fc.asins['r1'], ['B000000002', 'B000000001'])
-        self.assertEqual(fc.headers['r1'], RESULT_HEADERS + [''])
-        self.assertEqual(fc.headers['r2'], RESULT_HEADERS + [''])
+        self.assertEqual(fc.headers['r1'], RESULT_HEADERS)
+        self.assertEqual(fc.headers['r2'], RESULT_HEADERS)
         self.assertEqual(result['sheets'][0]['invalid_rows_retained'], 1)
         self.assertTrue(manifest['business_ready'])
         self.assertEqual(len(fc.backups), 2)
@@ -128,7 +128,7 @@ class WeeklyResultTest(unittest.TestCase):
         result, _ = self.run_sync(fc)
         self.assertEqual(result['row_count'], 1)
         self.assertEqual(fc.asins['r1'], ['B000000001'])
-        self.assertTrue(any(rng.startswith('A3:P') for _, rng, _ in fc.writes))
+        self.assertTrue(any(rng.startswith('A3:V') for _, rng, _ in fc.writes))
 
     def test_duplicate_asin_blocks_before_any_write(self):
         fc = FakeFeishu({'s1': source(row('B000000001'), row('B000000001')), 's2': []})

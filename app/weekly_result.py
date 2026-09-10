@@ -8,17 +8,22 @@ import hashlib
 import json
 
 from feishu import COMPACT_BASE_HEADERS, read_source_rows, col_letter
+from frontend_checks import FRONTEND_HEADERS
 from models import PageStatus
 from weekly_assets import WeeklyAssetStore, assert_result_write_target
 from publication_guard import assert_latest_run
 from sheet_io import read_rows
 
 
-RESULT_HEADERS = COMPACT_BASE_HEADERS + [
+LEGACY_PRICE_RESULT_HEADERS = COMPACT_BASE_HEADERS + [
     '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '时间戳',
     '币种', 'Amazon链接',
 ]
-LEGACY_RESULT_HEADERS = RESULT_HEADERS[:13] + ['HTML链接', '币种', 'Amazon链接']
+LEGACY_RESULT_HEADERS = LEGACY_PRICE_RESULT_HEADERS[:13] + ['HTML链接', '币种', 'Amazon链接']
+PRICE_RESULT_HEADERS = COMPACT_BASE_HEADERS + [
+    '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '币种',
+]
+RESULT_HEADERS = PRICE_RESULT_HEADERS + list(FRONTEND_HEADERS) + ['时间戳', 'Amazon链接']
 
 
 def _display_discount(value):
@@ -143,24 +148,24 @@ def sync_weekly_result_base(fc, store: WeeklyAssetStore, period_id: str,
                         row_count=capacities.get(sheet_id))
         old_last = 2 + len(old)
         clear_last = max(old_last, 2 + len(plan['values']))
-        fc.write_values(result_token, sheet_id, 'A2:P2', [RESULT_HEADERS + ['']])
+        fc.write_values(result_token, sheet_id, 'A2:V2', [RESULT_HEADERS])
         if clear_last >= 3:
             for start in range(3, clear_last + 1, 200):
                 end = min(start + 199, clear_last)
-                fc.write_values(result_token, sheet_id, f'A{start}:P{end}',
-                                [[''] * 16 for _ in range(end - start + 1)])
+                fc.write_values(result_token, sheet_id, f'A{start}:V{end}',
+                                [[''] * len(RESULT_HEADERS) for _ in range(end - start + 1)])
         if plan['values']:
             for offset in range(0, len(plan['values']), 200):
                 chunk = plan['values'][offset:offset + 200]
                 fc.write_values(result_token, sheet_id, f'A{3 + offset}:G{2 + offset + len(chunk)}', chunk)
 
-        verified_header = fc.read_values(result_token, sheet_id, 'A2:P2')
+        verified_header = fc.read_values(result_token, sheet_id, 'A2:V2')
         verified_asins = fc.read_values(
             result_token, sheet_id, f'A3:A{2 + len(plan["values"])}') if plan['values'] else []
         actual_asins = [str(row[0]) for row in verified_asins if row]
         expected_asins = [str(row[0]) for row in plan['values']]
-        if not verified_header or verified_header[0][:15] != RESULT_HEADERS or any(verified_header[0][15:]):
-            raise RuntimeError(f'[{title}] A:O 表头回读校验失败')
+        if not verified_header or verified_header[0][:len(RESULT_HEADERS)] != RESULT_HEADERS:
+            raise RuntimeError(f'[{title}] A:V 表头回读校验失败')
         if actual_asins != expected_asins:
             raise RuntimeError(f'[{title}] A:G 数据回读校验失败')
         if plan['values']:
@@ -208,30 +213,33 @@ def _publish_price_rows(fc, store, manifest, plans, results, run_id, checkpoint)
         if set(by_asin) != {r.asin for r in plan['rows']}:
             raise RuntimeError(f'[{title}] ASIN集合与本批快照不一致，禁止遗漏商品')
         if title in existing:
-            header = fc.read_values(token, existing[title], 'A2:P2')
+            header = fc.read_values(token, existing[title], 'A2:V2')
             h = header[0] if header else []
             owned_empty = (manifest.get('pending_result_sheets', {}).get(title) == existing[title]
                            and not any(h))
             if not (owned_empty or h[:16] == LEGACY_RESULT_HEADERS or
-                    (h[:15] == RESULT_HEADERS and not any(h[15:]))):
+                    (h[:15] == LEGACY_PRICE_RESULT_HEADERS and not any(h[15:])) or
+                    (h[:len(RESULT_HEADERS)] == RESULT_HEADERS)):
                 raise RuntimeError(f'[{title}] 未知结果表布局，禁止覆盖')
         safe[title] = {}
-        grid = [RESULT_HEADERS + ['']]
+        grid = [RESULT_HEADERS]
         for index, (row, base) in enumerate(zip(plan['rows'], plan['values']), start=3):
             cr = by_asin[row.asin]
             if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
-                             PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR):
+                             PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR,
+                             PageStatus.PAGE_NOT_FOUND, PageStatus.SOURCE_INVALID):
                 blocked.append({'sheet': title, 'asin': row.asin, 'reason': cr.error or cr.status.value})
                 # Never carry old prices onto new or reordered source rows.
-                price = ['', '-', '', '', '-', cr.timestamp,
-                         cr.currency_code if cr.currency_code in ('USD', 'CAD') else '',
-                         cr.product_url or '']
+                price = ['', '-', '', '', '-',
+                         cr.currency_code if cr.currency_code in ('USD', 'CAD') else '']
+                price += cr.frontend_columns() + [cr.timestamp, cr.product_url or '']
             else:
-                price = result_values(cr)
+                price = result_values_with_frontend(cr)
                 safe[title][index] = row.asin
-            grid.append(base + price + [''])
+            grid.append(base + price)
         grids[title] = grid
     report = {'run_id': run_id, 'written_rows': 0, 'base_rows_written': 0,
+              'frontend_checks_written': 0,
               'blocked': blocked, 'failures': [], 'verified': {}, 'sheet_count': len(plans)}
     manifest.update(business_ready=False, base_sync_pending=True)
     store.save(manifest['period_id'], manifest)
@@ -247,14 +255,16 @@ def _publish_price_rows(fc, store, manifest, plans, results, run_id, checkpoint)
             fc.backup_target_sheet(token, title, sid, run_id)
             old = read_rows(fc, token, sid, last='A', start=3, row_count=capacities.get(sid))
             grid = list(grids[title])
-            grid.extend([[''] * 16 for _ in range(max(0, 1 + len(old) - len(grid)))])
+            grid.extend([[''] * len(RESULT_HEADERS) for _ in range(max(0, 1 + len(old) - len(grid)))])
             for offset in range(0, len(grid), 200):
                 assert_latest_run(store, manifest, run_id)
                 chunk = grid[offset:offset + 200]
-                rng = f'A{2 + offset}:P{1 + offset + len(chunk)}'
+                rng = f'A{2 + offset}:V{1 + offset + len(chunk)}'
                 fc.write_values(token, sid, rng, chunk)
                 verify_matrix(fc.read_values(token, sid, rng), chunk)
                 report['base_rows_written'] += sum(
+                    3 <= n <= 2 + len(plan['rows']) for n in range(2 + offset, 2 + offset + len(chunk)))
+                report['frontend_checks_written'] += sum(
                     3 <= n <= 2 + len(plan['rows']) for n in range(2 + offset, 2 + offset + len(chunk)))
                 for n in range(2 + offset, 2 + offset + len(chunk)):
                     if n in safe[title]:
@@ -281,9 +291,16 @@ def _publish_price_rows(fc, store, manifest, plans, results, run_id, checkpoint)
 
 
 def result_values(cr) -> list:
+    """Return the H:M price block; timestamp and link are final U:V columns."""
     if (cr.currency_code or '') not in ('', 'USD', 'CAD'):
         raise RuntimeError(f'{cr.asin} 币种不允许写入: {cr.currency_code!r}')
-    return cr.six_columns() + [cr.currency_code or '', cr.product_url or '']
+    values = cr.six_columns()
+    return values[:5] + [cr.currency_code or '']
+
+
+def result_values_with_frontend(cr) -> list:
+    """Return the contiguous H:V product result block in current order."""
+    return result_values(cr) + cr.frontend_columns() + [cr.timestamp, cr.product_url or '']
 
 
 def scalar_cell(value):
@@ -338,7 +355,13 @@ def _contiguous(rows: dict[int, list]):
 def write_weekly_result_columns(fc, manifest: dict, run_id: str,
                                 results_by_sheet: dict[str, list], cfg: dict,
                                 checkpoint=None) -> dict:
-    """预检后把同一 run_id 的 H:O 写入独立结果表；旧布局备份后迁移。"""
+    """Publish the contiguous H:V block with safe legacy-layout migration.
+
+    Existing A:G source rows are preserved in this recovery path.  Every
+    result row still receives H:V, including blocked rows whose price and
+    frontend values are cleared/unknown, so an older successful price cannot
+    survive a new failed run.
+    """
     result_token = str((manifest.get('result') or {}).get('spreadsheet_token') or '')
     assert_result_write_target(manifest, result_token)
     if not manifest.get('business_ready'):
@@ -349,20 +372,29 @@ def write_weekly_result_columns(fc, manifest: dict, run_id: str,
                   for item in target_metadata}
     plans = []
     blocked = []
-    migrations = []
     required = bool(cfg.get('html_archive_required', True))
+    gate_statuses = {
+        PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
+        PageStatus.PARSE_ERROR, PageStatus.CURRENCY_ERROR,
+        PageStatus.PAGE_NOT_FOUND, PageStatus.SOURCE_INVALID,
+    }
 
-    # 所有布局、ASIN和run_id校验必须先于第一笔写入。
+    # All layout, ASIN and run_id checks happen before the first cloud write.
     for sheet, crawls in results_by_sheet.items():
         mapping = mappings.get(sheet)
         sheet_id = (mapping or {}).get('result_sheet_id')
         if not sheet_id:
             raise RuntimeError(f'[{sheet}] manifest 缺少结果 Sheet ID')
-        header = fc.read_values(result_token, sheet_id, 'A2:P2')
-        if header and header[0][:16] == LEGACY_RESULT_HEADERS:
-            migrations.append((sheet, sheet_id))
-        elif not header or header[0][:15] != RESULT_HEADERS or any(header[0][15:]):
-            raise RuntimeError(f'[{sheet}] A:O 布局预检失败')
+        header = fc.read_values(result_token, sheet_id, 'A2:V2')
+        h = header[0] if header else []
+        if h[:len(RESULT_HEADERS)] == RESULT_HEADERS:
+            layout = 'current'
+        elif h[:len(LEGACY_RESULT_HEADERS)] == LEGACY_RESULT_HEADERS:
+            layout = 'legacy_a_p'
+        elif h[:len(LEGACY_PRICE_RESULT_HEADERS)] == LEGACY_PRICE_RESULT_HEADERS and not any(h[len(LEGACY_PRICE_RESULT_HEADERS):]):
+            layout = 'legacy_a_o'
+        else:
+            raise RuntimeError(f'[{sheet}] 未知结果表布局，拒绝覆盖')
         asin_values = read_rows(fc, result_token, sheet_id, last='A', start=3,
                                 row_count=capacities.get(sheet_id))
         asin_map = {}
@@ -374,6 +406,7 @@ def write_weekly_result_columns(fc, manifest: dict, run_id: str,
                 raise RuntimeError(f'[{sheet}] 结果表重复 ASIN: {asin}')
             asin_map[asin] = offset
         rows = {}
+        safe_rows = set()
         seen_crawls = set()
         for cr in crawls:
             if cr.asin in seen_crawls:
@@ -384,68 +417,87 @@ def write_weekly_result_columns(fc, manifest: dict, run_id: str,
             row_number = asin_map.get(cr.asin)
             if not row_number:
                 raise RuntimeError(f'[{sheet}] 结果表找不到 ASIN: {cr.asin}')
-            if cr.status == PageStatus.CURRENCY_ERROR:
-                blocked.append({'sheet': sheet, 'asin': cr.asin,
-                                'reason': 'currency_error'})
-                continue
-            if cr.status in (PageStatus.CRAWL_ERROR, PageStatus.IDENTITY_MISMATCH,
-                             PageStatus.PARSE_ERROR):
-                blocked.append({'sheet': sheet, 'asin': cr.asin,
-                                'reason': cr.error or cr.status.value})
-                continue
-            if required and cr.status in (PageStatus.OK, PageStatus.SOLD_OUT,
-                                          PageStatus.PAGE_NOT_FOUND):
+            blocked_reason = ''
+            if cr.status in gate_statuses:
+                blocked_reason = cr.error or cr.status.value
+            elif required and cr.status in (PageStatus.OK, PageStatus.SOLD_OUT):
                 if cr.archive_status != 'ok' or not cr.html_url:
-                    blocked.append({'sheet': sheet, 'asin': cr.asin,
-                                    'reason': cr.archive_error or 'html_archive_missing'})
-                    continue
-            rows[row_number] = result_values(cr)
-        plans.append((sheet, sheet_id, rows, {v: k for k, v in asin_map.items()}))
+                    blocked_reason = cr.archive_error or 'html_archive_missing'
+            if blocked_reason:
+                blocked.append({'sheet': sheet, 'asin': cr.asin, 'reason': blocked_reason})
+                values = ['', '-', '', '', '-',
+                          cr.currency_code if cr.currency_code in ('USD', 'CAD') else '']
+                values += cr.frontend_columns() + [cr.timestamp, cr.product_url or '']
+            else:
+                values = result_values_with_frontend(cr)
+                safe_rows.add(row_number)
+            rows[row_number] = values
+        if set(seen_crawls) != set(asin_map):
+            missing = sorted(set(asin_map) - set(seen_crawls))
+            extra = sorted(set(seen_crawls) - set(asin_map))
+            raise RuntimeError(f'[{sheet}] ASIN集合不一致 missing={missing} extra={extra}')
+        plans.append((sheet, sheet_id, rows, {v: k for k, v in asin_map.items()},
+                      safe_rows, layout, len(asin_values)))
 
-    # Only the known N:P result columns are touched. A:G and source/snapshot
-    # stay unchanged. Header and values move in ONE request per sheet, making
-    # retries idempotent if a preceding request succeeded but its response was lost.
-    report = {'run_id': run_id, 'written_rows': 0, 'blocked': blocked,
+    report = {'run_id': run_id, 'written_rows': 0, 'base_rows_written': 0,
+              'frontend_checks_written': 0, 'blocked': blocked,
               'sheet_count': len(plans), 'failures': [], 'verified': {}}
-    migration_sheets = {sheet for sheet, _ in migrations}
-    for sheet, sheet_id, rows, asins in plans:
+    for sheet, sheet_id, rows, asins, safe_rows, layout, old_count in plans:
         try:
             fc.backup_target_sheet(result_token, sheet, sheet_id, run_id)
-            if sheet in migration_sheets:
-                old = read_rows(fc, result_token, sheet_id, first='N', last='P', start=2,
+            if layout == 'legacy_a_p':
+                old = read_rows(fc, result_token, sheet_id, first='M', last='P', start=2,
                                 row_count=capacities.get(sheet_id))
-                if not old or old[0][:3] != ['HTML链接', '币种', 'Amazon链接']:
-                    raise RuntimeError(f'[{sheet}] 迁移前N:P表头已变化')
+                if not old or old[0][:4] != ['时间戳', 'HTML链接', '币种', 'Amazon链接']:
+                    raise RuntimeError(f'[{sheet}] 迁移前M:P表头已变化')
                 shifted = []
-                for row in old:
-                    padded = list(row) + [''] * (3 - len(row))
-                    shifted.append([scalar_cell(padded[1]), scalar_cell(padded[2]), ''])
-                rng = f'N2:P{1 + len(shifted)}'
-                fc.write_values(result_token, sheet_id, rng, shifted)
-                verify_matrix(fc.read_values(result_token, sheet_id, rng), shifted)
-                check = fc.read_values(result_token, sheet_id, 'A2:P2')
-                if not check or check[0][:15] != RESULT_HEADERS or any(check[0][15:]):
-                    raise RuntimeError(f'[{sheet}] 无HTML列迁移回读失败')
+                for row in old[1:]:
+                    padded = list(row) + [''] * (4 - len(row))
+                    shifted.append([
+                        scalar_cell(padded[2]),  # M: currency
+                        *([''] * 7),             # N:T: frontend checks
+                        scalar_cell(padded[0]),  # U: timestamp
+                        scalar_cell(padded[3]),  # V: Amazon link
+                    ])
+                if shifted:
+                    rng = f'M3:V{2 + len(shifted)}'
+                    fc.write_values(result_token, sheet_id, rng, shifted)
+                    verify_matrix(fc.read_values(result_token, sheet_id, rng), shifted)
+            fc.write_values(result_token, sheet_id, 'A2:V2', [RESULT_HEADERS])
+            verify_matrix(fc.read_values(result_token, sheet_id, 'A2:V2'), [RESULT_HEADERS])
         except Exception as exc:
             report['failures'].append({'sheet': sheet, 'stage': 'backup_or_migration', 'error': str(exc)})
             blocked.extend({'sheet': sheet, 'asin': asins[r], 'reason': str(exc)} for r in rows)
             if checkpoint:
                 checkpoint(report)
             continue
+
+        # Clear H:V for stale rows while preserving the source A:G block.
+        stale = {row: [''] * 15 for row in range(3, old_count + 3) if row not in rows}
+        for start, end, values in _contiguous(stale):
+            try:
+                fc.write_values(result_token, sheet_id, f'H{start}:V{end}', values)
+                verify_matrix(fc.read_values(result_token, sheet_id, f'H{start}:V{end}'), values)
+            except Exception as exc:
+                report['failures'].append({'sheet': sheet, 'range': f'H{start}:U{end}',
+                                           'stage': 'tail_cleanup', 'error': str(exc)})
+
         for start, end, values in _contiguous(rows):
             try:
                 expected_asins = [[asins[r]] for r in range(start, end + 1)]
                 verify_matrix(fc.read_values(result_token, sheet_id, f'A{start}:A{end}'), expected_asins)
-                rng = f'H{start}:O{end}'
+                rng = f'H{start}:V{end}'
                 fc.write_values(result_token, sheet_id, rng, values)
-                actual = fc.read_values(result_token, sheet_id, f'A{start}:O{end}')
+                actual = fc.read_values(result_token, sheet_id, f'A{start}:V{end}')
                 verify_matrix([[row[0]] if row else [] for row in actual], expected_asins)
-                verify_matrix([row[7:15] for row in actual], values)
-                report['written_rows'] += len(values)
+                verify_matrix([row[7:22] for row in actual], values)
+                report['base_rows_written'] += len(values)
+                report['frontend_checks_written'] += len(values)
+                report['written_rows'] += sum(1 for row in range(start, end + 1) if row in safe_rows)
                 for row in range(start, end + 1):
                     report['verified'][f'{sheet}:{asins[row]}'] = True
             except Exception as exc:
-                report['failures'].append({'sheet': sheet, 'range': f'H{start}:O{end}',
+                report['failures'].append({'sheet': sheet, 'range': f'H{start}:V{end}',
                                            'stage': 'write_or_verify', 'error': str(exc)})
                 blocked.extend({'sheet': sheet, 'asin': asins[r], 'reason': str(exc)}
                                for r in range(start, end + 1))

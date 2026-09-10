@@ -12,6 +12,7 @@ import hashlib
 import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -152,6 +153,34 @@ def _resolve_cols(header_row: list, cfg: dict) -> dict:
     return cols
 
 
+_FORMULA_TEXT_PREFIXES = ('=', 'IF(', '=IF(', 'IFNA(', '=IFNA(', 'INDEX(', '=INDEX(')
+
+
+def _resolve_source_size(raw_size, sku: str) -> str:
+    """Return a displayable source size instead of leaking BI lookup formulas.
+
+    Some weekly source cells contain a formula serialized without the leading
+    ``=``.  The result Spreadsheet intentionally does not copy the auxiliary
+    ``BI源数据`` tab, so forwarding that formula makes the result blank or
+    displays the formula text.  Product SKUs carry the same size token for the
+    supported weekly layouts; use it only for formula-like size cells and keep
+    already-evaluated source values unchanged.
+    """
+    raw = str(raw_size or '').strip()
+    if not raw.upper().startswith(_FORMULA_TEXT_PREFIXES):
+        return raw
+    value = str(sku or '').strip()
+    match = re.search(
+        r'(?i)(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)', value)
+    if match:
+        return f"{match.group(1)}'X{match.group(2)}'"
+    # One-dimensional rug SKUs use 8R, 10FT, or R10FT; the source display
+    # convention for these rows is simply 8' / 10'.
+    match = re.search(
+        r'(?i)(?:^|[-_])R?(\d+(?:\.\d+)?)(?:FT|R)(?:$|[-_])', value)
+    return f"{match.group(1)}'" if match else ''
+
+
 def read_source_rows(vals: list[list], cfg: dict,
                      source_kind: str = 'feishu') -> tuple[list[ReportRow], list[dict]]:
     """从 2D 单元格矩阵解析周报行（表头自动探测 + 列名定位 + target 本地兜底）。
@@ -179,10 +208,11 @@ def read_source_rows(vals: list[list], cfg: dict,
             if 'http' in str(asin_v).lower():
                 raise RuntimeError(f'源行{idx}商品链接无效: {exc}') from exc
             continue
+        sku = str(_cell(cols['sku']) or '').strip()
         rr = ReportRow(
             row_num=idx, asin=asin,
-            sku=str(_cell(cols['sku']) or '').strip(),
-            size=str(_cell(cols.get('size', 4)) or '').strip(),
+            sku=sku,
+            size=_resolve_source_size(_cell(cols.get('size', 4)), sku),
             normal_price=_num_or_none(_cell(cols['normal_price'])),
             h_type=str(_cell(cols['h_type']) or '').strip(),
             i_value=_parse_i_value(_cell(cols['i_value'])),
@@ -306,25 +336,71 @@ class FeishuClient:
         obj, _ = self.resolve_wiki_obj(wiki_url)
         return obj
 
+    def _permission_members(self, file_token: str, file_type: str) -> list[dict]:
+        """读取云文档协作者，处理分页并返回可审计的成员列表。"""
+        items = []
+        page_token = ''
+        seen_page_tokens = set()
+        while True:
+            params = {'type': file_type, 'page_size': 100}
+            if page_token:
+                params['page_token'] = page_token
+            r = self._client.get(
+                f'/drive/v1/permissions/{file_token}/members',
+                params=params, headers=self._headers())
+            r.raise_for_status()
+            data = r.json()
+            if data.get('code') != 0:
+                raise RuntimeError(f"读取云文档协作者失败: {data.get('msg')}")
+            page = data.get('data') or {}
+            items.extend(page.get('items') or [])
+            next_page_token = str(page.get('page_token') or '').strip()
+            if not page.get('has_more') or not next_page_token:
+                return items
+            if next_page_token in seen_page_tokens:
+                raise RuntimeError('读取云文档协作者分页游标重复，禁止不完整授权回读')
+            seen_page_tokens.add(next_page_token)
+            page_token = next_page_token
+
     def ensure_permission_member(self, file_token: str, file_type: str,
                                  member_id: str, member_type: str = 'openid',
                                  perm: str = 'full_access') -> dict:
-        """幂等确保指定成员拥有云文档权限。"""
+        """幂等确保指定成员拥有云文档权限，并回读确认最终权限。"""
         if not file_token or not member_id:
             raise RuntimeError('云文档授权缺少 file_token 或 member_id')
-        r = self._client.get(
-            f'/drive/v1/permissions/{file_token}/members',
-            params={'type': file_type, 'page_size': 100}, headers=self._headers())
-        r.raise_for_status()
-        data = r.json()
-        if data.get('code') != 0:
-            raise RuntimeError(f"读取云文档协作者失败: {data.get('msg')}")
-        for item in (data.get('data') or {}).get('items') or []:
-            if (item.get('member_id') == member_id
-                    and item.get('member_type') == member_type
-                    and item.get('perm') == perm):
-                return {'member_id': member_id, 'member_type': member_type,
-                        'perm': perm, 'reused': True}
+        members = self._permission_members(file_token, file_type)
+        existing = next((item for item in members
+                         if item.get('member_id') == member_id
+                         and item.get('member_type') == member_type), None)
+        if existing and existing.get('perm') == perm:
+            return {'member_id': member_id, 'member_type': member_type,
+                    'perm': perm, 'reused': True, 'verified': True}
+        if existing:
+            # A copied resource can inherit a lower permission. Upgrade the
+            # existing member instead of POSTing a duplicate collaborator.
+            r = self._client.put(
+                f'/drive/v1/permissions/{file_token}/members/{quote(member_id, safe="")}',
+                params={'type': file_type, 'member_type': member_type,
+                        'need_notification': 'true'},
+                json={'member_type': member_type, 'perm': perm},
+                headers=self._headers())
+            r.raise_for_status()
+            data = r.json()
+            if data.get('code') != 0:
+                raise RuntimeError(f"升级云文档管理协作者失败: {data.get('msg')}")
+            verified = any(
+                item.get('member_id') == member_id
+                and item.get('member_type') == member_type
+                and item.get('perm') == perm
+                for item in self._permission_members(file_token, file_type)
+            )
+            if not verified:
+                raise RuntimeError(
+                    f'云文档权限升级接口已返回成功，但回读不到目标管理权限: '
+                    f'{member_type}/{member_id}/{perm}')
+            return {'member_id': member_id, 'member_type': member_type,
+                    'perm': perm, 'reused': True, 'updated': True,
+                    'verified': True}
         r = self._client.post(
             f'/drive/v1/permissions/{file_token}/members',
             params={'type': file_type, 'need_notification': 'true'},
@@ -334,8 +410,58 @@ class FeishuClient:
         data = r.json()
         if data.get('code') != 0:
             raise RuntimeError(f"添加云文档管理协作者失败: {data.get('msg')}")
+        verified = any(
+            item.get('member_id') == member_id
+            and item.get('member_type') == member_type
+            and item.get('perm') == perm
+            for item in self._permission_members(file_token, file_type)
+        )
+        if not verified:
+            raise RuntimeError(
+                f'云文档授权接口已返回成功，但回读不到目标成员或管理权限: '
+                f'{member_type}/{member_id}/{perm}')
         return {'member_id': member_id, 'member_type': member_type,
-                'perm': perm, 'reused': False}
+                'perm': perm, 'reused': False, 'verified': True}
+
+    def ensure_generated_resource_access(self, file_token: str,
+                                         file_type: str) -> dict:
+        """给本应用新生成的云端资源自动授予周成业管理权限。
+
+        该策略只作用于创建/复制后得到的新资源，不会扫描或批量修改历史
+        文件。所有新增的 Spreadsheet、Drive 文件或文件夹都应在拿到 token
+        后调用本方法；当前 ``copy_file`` 和 ``create_spreadsheet`` 已内置调用。
+        """
+        # Minimal test doubles and legacy read-only callers may not carry the
+        # policy key. Only the fully loaded project config opts them in.
+        if not self.cfg.get('feishu_auto_grant_generated_resources', False):
+            return {'enabled': False, 'verified': False}
+        member_id = str(self.cfg.get('feishu_manager_open_id') or '').strip()
+        if not member_id:
+            raise RuntimeError(
+                '启用了飞书新资源自动授权，但缺少 feishu_manager_open_id；'
+                '禁止把未授权资源标记为已完成')
+        if not re.fullmatch(r'ou_[A-Za-z0-9]+', member_id):
+            raise RuntimeError('feishu_manager_open_id 格式无效，禁止自动授权')
+        member_type = str(
+            self.cfg.get('feishu_generated_resource_member_type') or 'openid'
+        ).strip()
+        perm = str(
+            self.cfg.get('feishu_generated_resource_perm') or 'full_access'
+        ).strip()
+        if member_type != 'openid' or perm != 'full_access':
+            raise RuntimeError(
+                '飞书新资源自动授权策略必须使用当前应用 openid/full_access，'
+                f'当前为 {member_type}/{perm}')
+        result = self.ensure_permission_member(
+            file_token, file_type, member_id,
+            member_type=member_type, perm=perm)
+        return {
+            'enabled': True,
+            'member_id': member_id,
+            'member_type': member_type,
+            'perm': perm,
+            **result,
+        }
 
     def send_text_message(self, open_id: str, text: str) -> str:
         """向指定用户发送任务完成通知，并返回 message_id。"""
@@ -575,6 +701,8 @@ class FeishuClient:
                 token = file_info.get('token') or ''
                 if not token:
                     raise RuntimeError('创建飞书副本成功但响应缺少副本 Token')
+                file_info['generated_resource_access'] = \
+                    self.ensure_generated_resource_access(token, file_type)
                 return file_info
             except (httpx.TransportError, httpx.HTTPStatusError, RuntimeError) as exc:
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
@@ -587,11 +715,17 @@ class FeishuClient:
                 # before issuing another side-effecting POST.
                 recovered = self._find_root_copy(name, file_type)
                 if recovered:
+                    recovered['generated_resource_access'] = \
+                        self.ensure_generated_resource_access(
+                            recovered['token'], file_type)
                     return recovered
                 if attempt + 1 < max_attempts:
                     time.sleep(2 + attempt * 3)
         recovered = self._find_root_copy(name, file_type)
         if recovered:
+            recovered['generated_resource_access'] = \
+                self.ensure_generated_resource_access(
+                    recovered['token'], file_type)
             return recovered
         raise RuntimeError(
             f'创建飞书副本在 {max_attempts} 次尝试后仍失败: {last_error}') from last_error
@@ -651,6 +785,8 @@ class FeishuClient:
         token = spreadsheet.get('spreadsheet_token') or ''
         if not token:
             raise RuntimeError('创建 Spreadsheet 成功但响应缺少 spreadsheet_token')
+        spreadsheet['generated_resource_access'] = \
+            self.ensure_generated_resource_access(token, 'sheet')
         return spreadsheet
 
     def add_sheet(self, spreadsheet: str, title: str, index: int = 1) -> str:

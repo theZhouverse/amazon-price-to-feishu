@@ -4,6 +4,7 @@ import unittest
 
 from weekly_registry import (
     parse_registry_values, select_current_registry_row,
+    select_for_scheduled_slot,
     validate_feishu_resource_url,
 )
 
@@ -152,6 +153,42 @@ class TestRegistrySelection(unittest.TestCase):
         ]
         with self.assertRaisesRegex(RuntimeError, '域名不允许'):
             select_current_registry_row(records, NOW, HOSTS)
+
+    def test_monday_morning_carries_previous_period(self):
+        records = [
+            row('2026-W33', 'https://wit0jhu6kvu.feishu.cn/sheets/Old',
+                '2026-08-13 09:00:00+08:00'),
+            row('2026-W34', 'https://wit0jhu6kvu.feishu.cn/sheets/Current',
+                '2026-08-20 09:00:00+08:00'),
+        ]
+        selected = select_for_scheduled_slot(records, NOW, HOSTS, 'monday_0730', '2026-W33')
+        self.assertEqual(selected.period_id, '2026-W33')
+        self.assertEqual(selected.selection_mode, 'monday_carryover')
+
+    def test_monday_afternoon_requires_a_newer_period(self):
+        records = [
+            row('2026-W33', 'https://wit0jhu6kvu.feishu.cn/sheets/Old',
+                '2026-08-13 09:00:00+08:00'),
+            row('2026-W34', 'https://wit0jhu6kvu.feishu.cn/sheets/Current',
+                '2026-08-20 09:00:00+08:00'),
+        ]
+        selected = select_for_scheduled_slot(records, NOW, HOSTS, 'monday_1530', '2026-W33')
+        self.assertEqual(selected.period_id, '2026-W34')
+        self.assertEqual(selected.selection_mode, 'monday_switch')
+        with self.assertRaisesRegex(RuntimeError, '没有比上一周期'):
+            select_for_scheduled_slot(records, NOW, HOSTS, 'monday_1530', '2026-W34')
+
+    def test_weekday_does_not_silently_switch_to_pending_period(self):
+        records = [
+            row('2026-W33', 'https://wit0jhu6kvu.feishu.cn/sheets/Old',
+                '2026-08-13 09:00:00+08:00'),
+            row('2026-W34', 'https://wit0jhu6kvu.feishu.cn/sheets/Current',
+                '2026-08-20 09:00:00+08:00'),
+        ]
+        selected = select_for_scheduled_slot(records, NOW, HOSTS, 'weekday_0730', '2026-W33')
+        self.assertEqual(selected.period_id, '2026-W33')
+        self.assertEqual(selected.selection_mode, 'weekday_steady')
+        self.assertEqual(selected.pending_period_change['period_id'], '2026-W34')
 
 
 if __name__ == '__main__':

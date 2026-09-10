@@ -1,11 +1,15 @@
 # TASKS: Amazon Daily
 
-## 2026-09-10 通知模板按收件人分级
+## 2026-09-10 飞书新资源统一管理权限规则
 
-- [x] 将生产完成通知统一改为“Hi，有个 Amazon 周报前端价格捕捉任务完成，请查收；”。周成业收到完整运行统计和本地数据，其他应用协作者仅收到结果表与固定说明文档链接；HTML端口行、本地路径（非管理员）和旧标题均不出现在正式消息中。
-- [x] 发送模板测试给周成业和陈家俊，两个接口回执均为`SENT`；回执见`outputs/notification_tests/20260910_template_test.json`。测试不代表正式任务执行，也未写入飞书结果表。
-- [x] 定向通知单元测试8/8通过；全量离线回归272/272通过（2026-09-10，测试进程约1.36秒）。兼容历史手工通知前缀，避免恢复/审计测试退化。
-- [ ] 下一次正式15:30批次核对两种正文实际送达：周成业完整版、其他协作者精简版；分别检查结果表/说明文档链接、统计字段和本地数据可见性，并记录真实`run_id`及墙钟耗时。
+> 本节记录当前有效规则；历史记录中“只给快照授权”“固定结果表保留既有权限”等旧口径仅作为当时证据，不覆盖本节。规则针对本开发项目使用的当前 Feishu 应用，未默认批量改历史云端文件。
+
+- [x] 当前应用身份核验：使用项目凭证换取 tenant token 后，只读查询应用通讯录，确认“周成业”对应当前应用维度 `open_id` 为配置中的 `ou_68e7d2af96255c1eeb1eea8021c80ea4`；未使用 BDLD 或 lark-cli 的跨应用人员 ID。
+- [x] 统一策略配置：新资源自动授权开启，成员类型固定 `openid`，权限固定 `full_access`（管理权限）；Secret、tenant token 和 Authorization 不写入代码、日志或配置文件。
+- [x] 创建/复制入口接入：`FeishuClient.create_spreadsheet()` 与通用 `copy_file()` 在拿到资源 token 后自动调用统一授权入口；返回对象附带脱敏的授权结果，调用方失败时不能继续标记 ready。
+- [x] 授权证据增强：先读取成员列表，缺失时写入，再重新读取并确认目标 `member_id/member_type/perm`；支持成员权限列表分页，回读失败或权限不一致时 fail-closed。
+- [ ] 历史资源补授权：未执行。若要处理已有表格、文件或文件夹，需要另行给出资源清单和“逐项补授权”确认，不从本次新资源规则推断历史资源已完成。
+- [ ] 真实新建/复制资源验收：待下一次明确的隔离测试资源创建后，用当前应用回读资源权限并保留 token、资源类型、成员权限和时间证据；不把本地单元测试当成云端验收。
 
 ## 2026-09-08 生产目录与开发目录隔离
 
@@ -13,11 +17,11 @@
 
 - [x] 发现并确认`D:\projects\amazon_daily`是指向生产根目录`D:\projects\amazon_daily_structured_20260821`的Windows Junction，不是独立副本；以后禁止在该路径开发。
 - [x] 创建独立开发副本`D:\projects\amazon_daily_dev_20260821`，基于当前Git工作区复制代码和文档，排除生产`.env`、`outputs`、`htmls`、`data`、`tmp`、`.venv`、`.workbuddy`和`.codex`；开发副本未安装Windows计划任务。
-- [ ] 为调度入口增加稳定的`scheduled_slot`参数/环境变量，不能用实际启动时间推断周一07:30与周一15:30；覆盖StartWhenAvailable延迟补跑和人工启动场景。
+- [x] 开发副本为调度入口增加稳定的`scheduled_slot`参数/环境变量，不能用实际启动时间推断周一07:30与周一15:30；离线覆盖StartWhenAvailable延迟补跑和人工启动场景；四条Windows任务尚未重新安装实测。
 - [ ] 增加发布前真实路径校验：解析开发路径、生产路径和Junction/符号链接，路径相同或解析后相同必须拒绝；发布白名单不得包含`.env`、`outputs`、`htmls`、`data`、`.venv`。
 - [ ] 增加生产发布脚本和回滚证据：取得运行锁、确认没有价格进程、备份到`outputs/code_backups/{release_id}`、复制并校验代码文件、保留生产运行产物，发布失败自动停止而不是覆盖运行状态。
 - [ ] 开发副本先完成离线回归和只读飞书检查；通过后再人工批准发布到生产目录。开发副本不得执行正式`--weekly-run --confirm`、不得安装/修改`AmazonDaily_0730/1530`。
-- [ ] 为正式`weekly-run`与旧兼容入口增加布局路由门禁：日常任务只能调用A:O（后续A:U）发布器，旧`sync_base_data`/`write_six_columns`不得写入固定结果表；补充误调用回归并在发布前回读表头。
+- [ ] 为正式`weekly-run`与旧兼容入口增加布局路由门禁：日常任务只能调用A:O兼容入口或A:V发布器，旧`sync_base_data`/`write_six_columns`不得写入固定结果表；补充误调用回归并在发布前回读表头。
 
 ## 2026-09-08 换周时点：周一早间沿用上周、周一下午切换本周
 
@@ -25,8 +29,8 @@
 
 - [x] 明确业务规则：周一07:30使用上一周已经固化的`period_id`/manifest/完整快照；周一15:30重新读取登记表并切换到更高的最新有效序号；周二至周五07:30/15:30沿用周一15:30确认的本周周期。
 - [x] 更新`docs/SPEC.md`第1、1.1、16、16.1、18.1、19.2、19.3节，补充来源选择、快照创建/复用、失败回退和通知字段规则。
-- [ ] 在代码中增加时段感知的来源选择器，至少输出`source_period_id`、`selection_mode`（`monday_carryover`/`monday_switch`/`weekday_steady`）和登记行号；周一07:30禁止选择最新本周链接。
-- [ ] 调度器必须传入稳定的`scheduled_slot`（如`monday_0730`/`monday_1530`），补跑时保持原计划槽位；人工运行单独标记`manual`，不能用当前墙钟时间冒充自动时段。
+- [x] 开发副本增加时段感知的来源选择器，输出`source_period_id`、`selection_mode`（`monday_carryover`/`monday_switch`/`weekday_steady`）和登记行号；周一07:30禁止选择最新本周链接；真实云端双时段仍待验收。
+- [x] 开发副本调度器向Python传入稳定的`scheduled_slot`（`monday_0730`/`monday_1530`/工作日槽位），补跑保持原计划槽位；人工运行标记`manual`；Windows任务重装实测仍待完成。
 - [ ] 周一07:30实现上一周期manifest/快照存在性、结构和权限校验；缺失或不可读时安全停止，不读取可变原表，不回退到任意旧周期。
 - [ ] 周一15:30要求登记表出现比上一周期更高的有效序号并完成源Token、完整副本、结构校验和manifest固化；无新序号、复制504/超时、权限或结构失败时保留上一周固定结果并通知周成业。
 - [ ] 周二至周五保持本周周期不变；发现新的更高序号或同序号换URL时只登记`pending_period_change`并告警，不在非换周时点静默切换。
@@ -38,17 +42,68 @@
 
 > 本节是实施任务清单，SPEC中的新增内容目前只代表目标规格，不代表代码已经实现或云端已经验收。
 
-- [ ] 为商品结果表增加P:U六个固定列：图片与品牌故事图片是否存在、前端尺寸是否一致、BSR标志是否存在、父子ASIN发散检查、环保标志是否存在、Amazon's Choice标志是否存在；完成旧A:P布局向A:U的安全迁移、写前备份、写后整行回读和尾行清理。
-- [ ] 新增前端检查模型和bundle字段，统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致、币种错误等整页门禁时六项均为`unknown`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
-- [ ] 在同一商品页面DOM和同一浏览器Tab中完成六项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。
-- [ ] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice按互斥规则输出`pass`/`not_applicable`/`fail`。
-- [ ] 新增两个店铺Seller Central Feedback管理器的独立会话与凭证引用，分页筛选星级小于3的feedback，保留原始评论内容和code；不得与商品详情页评论、Review或Q&A混用。
-- [ ] 新增固定`Feedback差评汇总`子表身份登记；按店铺加feedback ID/code幂等合并，两个店铺共用一张子表，保留店铺字段，禁止按同名猜测Sheet或每次新建。
-- [ ] 保存Feedback分页、筛选、去重、写入和回读证据到`outputs/feedback/{run_id}/`；凭证、Cookie、Authorization不得落盘。单店铺失败继续另一店铺，价格结果不回滚，通知中单独报告Feedback状态。
-- [ ] 扩展weekly bundle、delivery、summary、notification和manifest统计：`frontend_checks_written`、六项检查状态计数、`feedback_rows_seen`、`feedback_rows_written`、每店铺状态和Feedback子表回读结果。
-- [ ] 增加离线回归：A:U表头/旧A:P迁移、六项检查正反例与unknown、身份门禁联动、同页复用、Feedback三页分页、低星筛选、重复合并、单店铺失败继续、凭证脱敏和通知统计。
-- [ ] 完成真实验收：US/CA最小商品样本、最小子表A:U写入回读、两个店铺Feedback只读分页、Feedback固定子表小批写入回读，再执行一次全量；每次记录run_id、起止时间、墙钟耗时、写入/阻断和各检查统计。
+### 最新开发/只读验收进度（2026-09-10）
+
+- [x] 修复真实紫鸟 CLI `.cmd` 多行脚本截断、中文页面常量编码失真、CLI 更新通知/评论签名风险误报、详情返回不生效和Shadow DOM空节点异常；加入列表/详情有界渲染重试、分页上限前置停止和详情后按页码恢复，并补充回归测试。
+- [x] 真实单条详情—返回探针通过：详情字段可回读，重新访问 Feedback Manager 后 marker、20行当前页和唯一分页按钮恢复正常；未写入飞书。
+- [ ] 冬豚首次7日只读探针已启动但因历史分页较长主动停止，当前只能记为`blocked/未完成`；北蓉正式流程、两店完整窗口、业务行写入和状态推进继续保持未执行。
+- [x] 固定 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 已创建唯一子表 `Feedback差评汇总`，Sheet ID `41u25y` 已登记到 `config/config.json`；`A1:I1` 回读与严格9列表头完全匹配。本次业务数据写入数为0，模块仍保持禁用。
+- [x] 两个店铺都完成单条低星详情只读复核：详情标记、订单路由身份、订单商品编号、ASIN、SKU均可回读；无登录、验证码或风控信号，且每个店铺完成后关闭上下文。
+- [x] 详情选择器登记为`text:订单内容`、`data-test-id:order-id-label`、`label:订单商品编号`、`label:ASIN`、`label:SKU`；标签值去除展示冒号，订单号支持详情路由回退并继续做身份比对。
+- [x] 真实页面确认分页控件是唯一可见`kat-link`文本`下一个 >`，内部链接位于Shadow DOM；代码按前缀识别并在“有数据但无分页控件”时fail-close，新增离线回归覆盖该阻断。
+- [x] 增加`page_date_order=newest_first`和安全日期边界：页内日期缺失/排序异常阻断，整页早于窗口起点时停止历史分页；增加探针专用`max_detail_attempts`，默认0不限制生产详情读取，探针达到上限时安全关闭，不推进状态。
+- [x] 2026-09-10 受限环境和正常Windows权限分别核验紫鸟CLI：受限环境Keychain不可见；正常用户权限下项目级CLI `doctor`、Keychain、Bridge、客户端登录和两店列表通过。真实结构诊断回读20行当前页、两个标记候选和无登录信号；修复可见标记过滤后单店探针进入详情链路，但因探针详情上限主动阻断，未计为正式成功。
+- [x] Feedback定向离线回归已扩展为30项，全部通过；没有写入业务行，`feedback.enabled=false`保持。
+- [x] 2026-09-10 两店各一页容量只读探针通过：两店均20行、低星候选各6行，日期范围和分页按钮状态已记录，单页耗时约22秒；未点击订单、未翻页、未写表。
+- [ ] 2026-09-10 整条写入验收被飞书凭证门禁阻断：当前开发副本未提供`FS_APP_SECRET`，认证返回`invalid param`；不得自动复用其他项目`.env`中的Secret。待用户提供当前项目授权的飞书环境变量/凭证入口后，继续首次7日双店写入回读、状态推进、3日增量、10日清理和07:30任务验收。
+- [x] 2026-09-10 首次7天双店真实只读完成：`feedback_readonly_full_20260910`，窗口`2026-09-04`至`2026-09-10`，两店各2页/40行，窗口内4+6条，详情10/10完整，边界页均为2，总耗时390.156秒；无写入、无状态推进。
+- [x] 2026-09-10 后续3天双店真实只读完成：`feedback_readonly_incremental_20260910`，窗口`2026-09-08`至`2026-09-10`，冬豚2页/40行/2条/详情2/2，北蓉1页/20行/0条，总耗时142.234秒；无写入、无状态推进。
+- [x] 2026-09-10 本地发布替身验证通过：首次10条写入、同输入幂等重跑、1条过期记录清理、9列写后回读和内存状态推进均通过；真实`Feedback差评汇总`只读确认表头正确、实际业务行0。
+- [x] 2026-09-10 按用户授权从生产目录凭证入口完成飞书只读认证和固定目标回读：`Feedback差评汇总`表头精确匹配、实际非空业务行0；Secret未复制/落盘，未备份、清空、写入生产表，未推进状态。
+- [x] 全局紫鸟 CLI 已在用户授权后完成只读连通性复核：`doctor`、Keychain/API认证、ZClaw Bridge、客户端登录状态和`store list --all`均通过；确认两店为`26782671389969`（冬豚）和`26686718929338`（北蓉）。
+- [x] 两店已分别打开Seller Central并到达准确地址`https://sellercentral.amazon.com/feedback-manager/index.html`；两店都确认【最新反馈】、固定5列表头和20条当前页数据，未出现登录、验证码或风控信号。基础`/feedback-manager`空壳地址已列为不可用来源。
+- [x] 已登记主表真实选择器并适配Amazon KAT组件：星级从`kat-star-rating[value]`读取，订单号从`kat-link`及其Shadow DOM链接读取，点击目标使用唯一订单链接；代码改用`domcontentloaded`加有界等待，避免Feedback SPA的`networkidle`不收口。
+- [x] 受控单条低星详情探测已成功进入订单详情路由；只读确认详情页有`订单商品编号`、`ASIN`、`SKU`标签及订单身份回退路径，详情配置已登记，但尚不能据此勾选F4/F10。
+- [ ] 下一步仍需完成两店正式多页/首次7日只读、二级详情批量回读、9列业务行写后整表回读、近10日清理和07:30任务验收；在此之前保持`feedback.enabled=false`，不写入业务行、不安装独立计划任务。
+
+- [x] 在开发副本完成商品结果表N:T七个固定前端列、U/V时间戳和Amazon链接的本地布局模型；前端列显示`✅`/`❌`/`-`，bundle保留原始状态。旧A:P/A:O迁移、写前备份、写后整行回读和尾行清理属于后端/发布分支，不在本分支执行真实云端写入。
+- [x] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
+- [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
+- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`，同一ASIN同时存在时两列均为`fail`并记录ASIN不合法。
+- [ ] F1：为两个店铺分别登记Seller Central【反馈管理器】URL、非敏感店铺标识、凭证引用和目标上下文；只允许从【最新反馈】区域读取，禁止接入商品Review、Q&A或前台评论。两个店铺必须使用独立会话并串行处理，不得混用页面、分页游标、订单详情或下载状态。
+- [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
+- [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。
+- [ ] F4：在【最新反馈】中解析店铺、日期、评级、订单编号、评论；筛选评级小于等于3的记录，缺失或无法解析评级不得默认合格。对每条合格记录点击订单编号进入二级页面，校验订单身份并读取订单商品编号、ASIN、SKU；二级详情失败不得猜测其他订单字段，主反馈可保留、详情字段留空并标记本地`partial`以便重试。
+- [ ] F5：固定`Feedback差评汇总`目标子表身份并改为严格9列表头：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`。两店结果写入同一子表，按固定店铺顺序上下连续分组、共用一个表头，不插入第二表头或合并单元格；目标表不追加内部幂等键、`run_id`或状态列。
+- [ ] F6：实现内部幂等和近10日清理。优先使用`店铺 + Seller Central稳定feedback ID`；没有稳定ID时使用`店铺 + 日期 + 评级 + 订单编号 + 评论内容哈希`，键和降级原因只写本地审计。重复读取更新同一逻辑行；写入前备份目标子表，按反馈日期删除早于10日窗口的行，写入后按9列整表回读。日期缺失或无法解释的记录不得静默写入窗口。
+- [ ] F7：保存`outputs/feedback/{run_id}/`证据和耗时。至少包含两店来源URL、店铺状态、窗口起止、页码、【下一个】按钮状态、原始读取数、评级合格数、二级详情尝试/完整数、写入数、过期删除数、失败原因、`started_at`、`finished_at`、`elapsed_seconds`和每店铺耗时；凭证、Cookie、Authorization和完整敏感响应不得落盘。无论成功、partial、blocked还是锁冲突，都必须有日志收口。
+- [ ] F8：扩展weekly bundle、delivery、summary、notification和manifest统计：`feedback_rows_seen`、`feedback_rows_eligible`、`feedback_rows_detail_complete`、`feedback_rows_written`、`feedback_rows_expired_deleted`、两店状态、两店耗时、窗口类型（`initial_7d`/`incremental_3d`）、Feedback子表回读结果和整个Feedback阶段耗时。Feedback失败不能覆盖或回滚已验证的价格结果。
+- [ ] F9：实现离线回归：评级1/2/3保留、评级4/5及缺失评级排除；首次7日与后续3日窗口切换；近10日过期清理；两店串行和单店失败继续；三页分页与【下一个】无变化门禁；订单二级详情身份校验；重复合并；表头严格9列；店铺上下分组；主反馈保留但详情partial；风控/登录/验证码立即停止；凭证脱敏；运行耗时和异常日志落盘。
+- [ ] F10：完成真实验收：先单店只读小批，再第二店只读小批，再两店首次7日只读与二级详情小批，随后固定子表9列写入/整表回读和近10日清理，最后验证后续3日增量与定时任务。每阶段保存独立`run_id`、窗口、店铺状态、页数、读取/筛选/详情/写入数量、起止时间、墙钟耗时和风控/阻断证据；未完成这些证据前不得把Feedback任务标记为完成或写入正式生产结果。
+- [ ] 价格任务仍需扩展weekly bundle、delivery、summary、notification和manifest统计：`frontend_checks_written`、七项检查状态计数以及上述Feedback独立统计；两个模块可以并行开发，但同一线上结果表的正式写入必须经过统一运行锁和单一发布门。
+- [ ] 实现前不得把本次新9列表头或Feedback数据写入飞书；不得把现有`seller_feedback.py`中旧的`<3`规则、A:L表结构、`code`字段或离线替身测试当作本次新模块已验收。实现后同步README、REVIEWS、操作手册/当前业务规则的跳转职责和部署配置说明。
 - [ ] 实现前不得把新增列或Feedback写入飞书；不得把当前价格任务的历史HTML或旧检查值当作新增结果。实现后同步README、REVIEWS、操作手册/当前业务规则的跳转职责和部署配置说明。
+
+### 本轮本地开发进度（2026-09-08）
+
+- [x] 开发副本增加 `frontend_checks.py`：七项检查复用同一份商品DOM快照，输出 `pass`/`fail`/`unknown`/`not_applicable`、观察值、原因、定位和独立规则版本；页面门禁及价格解析门禁失败时写入 `unknown`。
+- [x] `CrawlResult`、缓存和本地CSV保留前端检查证据；weekly bundle/summary/通知开始记录 `source_period_id`、`scheduled_slot`、`selection_mode` 和前端状态统计。
+- [x] 结果发布器本地切换到 A:V，当前顺序为A:G源字段、H:M价格/币种、N:T前端勾叉、U/V时间戳/链接；识别旧 A:P/A:O 布局，写前备份、旧列迁移和整段回读逻辑已加入；尚未对真实固定结果表执行迁移验收。
+- [x] 2026-09-09 已在开发副本将 `seller_feedback.py` 重构为本次`<=3`、严格9列、二级订单详情合并、首次7日/后续3日窗口、近10日留存、幂等和写后回读核心；新增 `seller_feedback_browser.py`，按登记选择器串行操作两店并对【最新反馈】、【下一个】、订单身份和风控信号 fail-close。当前只完成离线假桥接回归，真实Seller Central会话/选择器/固定Sheet ID尚未验收，不能勾选F1-F10完成。
+- [x] 2026-09-09 参考项目级紫鸟 CLI 只读复核：使用 `C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\ziniao-cli.cmd` 的 `doctor` 和 `store list --all`，Keychain/API认证、ZClaw Bridge 和客户端登录状态通过，返回冬豚 `26782671389969`、北蓉 `26686718929338` 两店；全局 npm CLI 的 Keychain 缺失仅作为错误路径记录。没有打开店铺、没有访问 Seller Central、没有写入飞书；真实Feedback验收仍待页面身份、选择器和固定Sheet ID门禁。
+- [x] 2026-09-09 前端实时只读小样本：Amazon.com `B0CLNJH915` 的 URL/标题身份一致，主图、当前选中尺寸、`From the brand`标题、当前商品可见AC和环保文本均已在实时页面核对；`B0BNDLPW1L`、`B0G5Y2TJQM` 当前为`Page Not Found`，按 v10 保留整页`unknown`边界；没有写入后端或固定结果表。该条只记录已完成的小样本，不替代下方 US/CA 多样本和 A:V 云端验收。
+- [x] 2026-09-09 Feedback管理器单店只读探针：冬豚店铺可打开，项目级 CLI 以 `domcontentloaded` 成功到达 `https://sellercentral.amazon.com/feedback-manager`；脱敏 DOM 诊断未发现页面标题、【最新反馈】或【下一个】，可见文本仅389字符，未触发登录/验证码/风控标志。已关闭店铺，未点击订单、未翻页、未读写飞书；页面结构未确认，不能勾选F1/F3/F4/F10。
+- [x] 增加显式 `scheduled_slot`、周一早间沿用、周一下午切换、工作日稳态 pending 记录，以及调度包装器向Python传递槽位；尚未重新安装并实测四条Windows计划任务。
+- [x] 2026-09-08 开发副本实测当前登记序号4：只读发现新快照19个子表、18个业务映射（US=11、CA=7），排除`BI源数据`；ASIN/商品链接审计有效720、无效0、辅助标签跳过294。随后创建独立快照副本（Token仅在日志中脱敏保存），原周报未写入。
+- [x] 前端单条实测：US `B0C5R56QTF` 使用新快照完成`amazon.com`/USD/90210/ASIN一致性门禁，尺寸`2.5x8`与页面`2.5' x 8'`匹配；首次样本暴露导航/语言误报后，收紧全局容器、尺寸结构和单位比较并升级前端规则`2026-09-08-v2`。CA首条`B0D9NT9JQN`保留真实`identity_mismatch`，N:T显示`-`且bundle为`unknown`，未绕过重试、未写飞书。
+- [x] 修正`--limit`按有效/无效源行合并后的原表行号截取，避免`source_data_invalid`记录使前端样本超出限制；以上真实样本均为dry-run，仅保存本地bundle/CSV/缓存证据。
+- [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，`From the brand`品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列均判定`fail`并记录ASIN不合法；尺寸规则补充`8'X10'`与`8 x 10 ft`的共享单位等价比较并忽略`Rectangular`后缀，规则版本升级为`2026-09-10-v11`。
+- [x] 2026-09-10 尺寸判定修复：发现旧 bundle 的 `expected` 仍是未求值的`BI源数据`公式文本，且旧规则无法把`2.5'X8'`与页面`2'6\" x 8'`识别为同一尺寸；新增公式源值解析、共享尾部单位等价和英尺小数/英尺加英寸换算。18个隔离业务子表只重算P列并逐表回读：719个商品行中`✅` 481、`❌` 0、`-` 238；没有改价格、SKU、尺寸C列或其他风控列。规则版本为`2026-09-10-v11`。
+- [x] 用历史离线HTML完成各站点/布局的选择器覆盖清单和前端反例回归；离线样本只用于规则验证，不能替代当次实时页面结果。紫鸟/ZClaw实时US/CA采集由后端/发布分支负责，不作为本分支前端完成条件。
+- [x] 依据业务反馈调整可见列：前端七列改为`✅`/`❌`/`-`，详细`pass/fail/unknown/not_applicable`仅保留在bundle；时间戳和Amazon链接移动到U/V最后两列，并同步旧A:P/A:O迁移逻辑。
+- [x] 原“前端隔离在线表验收”已确认仅使用历史离线HTML，不能作为实时验收依据；其结果保留作选择器回归证据，不再作为线上前端完成证明。
+- [x] 前端实时隔离验收：已按原入口`app/run.py --weekly-run --dry-run --force-fetch`（单表门禁另加`--sheets PD03 --limit 1`）逐行打开实际商品链接，由原流程内部复用`run_fetch`/`AmazonBrowser`完成同页七项检查；原bundle已写入新测试表并逐范围回读。不得另起独立浏览器/CDP路径，生产结果表未写入。历史HTML只作fixture。全量结果和技术异常明细见`docs/REVIEWS.md`的“2026-09-10 原入口实时全量结果”；异常存在，所以此项完成的是实时验证执行，不代表生产合并批准。
+- [ ] 后端/发布分支完成A:V真实最小批云端写入回读、两个店铺Seller Central只读分页和全量验收后，再按统一发布门验收；该项不阻断本分支前端规则、离线回放和本地bundle完成。
 
 ## 2026-09-07 临时全量补跑：seq-4（15:48 启动）
 
@@ -318,6 +373,7 @@
   - 验证：同一 period 连续初始化两次返回相同快照和结果表；并发初始化不重复创建；缺少初始化的普通任务安全退出
   - 验证记录（2026-08-24）：新增 `weekly_assets.py`，实现 manifest 原子写入、周期排他锁、精确名称中断恢复、Token 写入保护、generation/history、显式重建和普通任务 `business_ready` 门禁。定向测试最终 5/5 通过（0.026s），覆盖并发锁、重复初始化复用、只允许结果表写入、重建保留历史及缺失/未映射 manifest 安全退出；最终完整离线回归 92/92 通过（0.086s）。无 `--confirm` 命令安全退出。真实 `--new-week --confirm` 首次创建 `seq-1` generation 1：正式快照 `GQJgs...Fnec`、正式结果表 `UWLds...AnNf`，15.859s；第二次只读校验后 `reused=True`，Token 完全一致、无重复资源，10.641s。manifest 状态/快照/结果均为 ready，快照 readonly、结果 readwrite，敏感键扫描无 App Secret、tenant token 或 Cookie。真实日常 `--dry-run --limit 1` 门禁在登记表读取后因 `business_ready=false` 于 10.6s 内退出，未启动 Amazon 或业务写入。证据：`outputs/weekly_runs/seq-1/weekly_manifest.json` 与对应运行日志；真实重建未执行，避免无必要新增云端资源，离线测试已验证 generation 递增和 history 保留。提交号待本阶段统一提交时补记。
   - 权限增强记录（2026-08-25）：新增`feishu_manager_open_id`和`ensure_permission_member`，每次创建或复用快照、独立结果表均幂等授予指定人工账号容器级`full_access`；缺少配置或授权失败时初始化不得ready。固定参考表协作者反查确认周成业Open ID为`ou_68e7d2af96255c1eeb1eea8021c80ea4`。现有正式快照`GQJgs...Fnec`和结果表`UWLds...AnNf`已补授权并回查为`openid/full_access/container`，两次均为首次新增；完整回归148/148通过（0.174s）。
+  - 权限规则补强（2026-09-10）：发现复用`fixed_result.json`时旧逻辑仅标记`fixed_result=true`而未执行权限回查，导致已存在的结果表可能只有应用自身权限。现已改为创建、复制和复用固定结果表统一调用`ensure_permission_member(..., openid, full_access)`并回读；新增固定结果回归测试，定向测试22/22通过。当前前端验证表`TEST_前端真实页面验证_20260910_083515`已对周成业补授并回查为`openid/full_access`，权限列表中应用本身与周成业均存在。
 
 #### Gate B：数据映射与 US/CA 抓取
 

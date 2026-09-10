@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""main.py — 正式流程：登记表 → 当批周报副本 → 抓取计算 → 固定结果表A:O。
+"""main.py — 正式流程：登记表 → 当批周报副本 → 抓取计算 → 固定结果表A:V。
 
 正式入口 --weekly-run --confirm；恢复 --weekly-push-only --run-id。
 所有CLI共享运行锁。以下旧参数仅供受限制的兼容/维护流程，不是正式全量入口。
@@ -10,14 +10,14 @@ CLI（方案 19 + 当前测试方案修正）：
   --limit 10               每表前 N 行（自动隐含 --dry-run）
   --no-headless            显示浏览器
   --force-fetch            忽略缓存重新抓取
-  --fetch-only             同步数据并抓取，不写飞书六列
+  --fetch-only             同步数据并抓取，不写飞书商品结果列
   --push-only              用最近快照缓存推送，不抓取
   --dry-run                读取+计算+本地输出，不改飞书
   --resume                 恢复最近有效的未完成批次（跨进程断点续跑）
   --run-id <id>            明确恢复指定批次
   --force-push             技术异常比例超阈值时仍写入（人工确认恢复推送）
   --inspect-feishu-layout  只读预检目标表布局，不写任何数据
-  --migrate-feishu-columns [--sheets ...] --confirm  一次性旧列清理 + 六列表头
+  --migrate-feishu-columns [--sheets ...] --confirm  兼容旧维护流程的一次性六列表头迁移
 """
 from __future__ import annotations
 
@@ -54,10 +54,12 @@ from exporters import export_results
 from feishu import FeishuClient, col_letter
 from models import CrawlResult, PageStatus, ReportRow
 from pricing import compute_result, dec
-from weekly_registry import select_current_registry_row
+from weekly_registry import select_current_registry_row, select_for_scheduled_slot
 from weekly_assets import WeeklyAssetStore, initialize_weekly_assets, require_business_ready
 from weekly_result import (_read_source_plan, sync_weekly_result_base, base_fingerprint,
                            write_weekly_result_columns)
+from frontend_checks import (frontend_status_counts, FRONTEND_CHECK_RULE_VERSION,
+                             FRONTEND_HEADERS)
 from archive_storage import ArchiveStorage
 from html_archive import SingleFileArchiver, write_manifest as write_html_manifest
 from weekly_mapping import build_discovery, save_discovery, validate_discovery
@@ -107,6 +109,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument('--dry-run', action='store_true', help='只读+计算+本地输出，不改飞书')
     ap.add_argument('--resume', action='store_true', help='恢复最近有效的未完成批次')
     ap.add_argument('--run-id', default=None, help='明确恢复指定批次(排错用)')
+    ap.add_argument('--scheduled-slot', default='manual',
+                    choices=('manual', 'monday_0730', 'monday_1530',
+                             'weekday_0730', 'weekday_1530'),
+                    help='调度计划槽位；补跑仍按原槽位选择来源，人工运行使用 manual')
     ap.add_argument('--force-push', action='store_true', help='异常比例超阈值时仍写入飞书')
     ap.add_argument('--inspect-feishu-layout', action='store_true',
                     help='只读预检目标表布局(表头行/ASIN起始行/旧列/J:O)')
@@ -115,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument('--create-snapshot-poc', action='store_true',
                     help='创建一个 TEST 周报完整副本并校验（必须配合 --confirm）')
     ap.add_argument('--create-result-poc', action='store_true',
-                    help='创建一个 TEST 独立结果 Spreadsheet 与 A:P 表头（必须配合 --confirm）')
+                    help='创建一个 TEST 独立结果 Spreadsheet 与 A:V 表头（必须配合 --confirm）')
     ap.add_argument('--new-week', action='store_true',
                     help='按固定登记表幂等初始化本周正式快照与独立结果表（必须配合 --confirm）')
     ap.add_argument('--recreate-weekly-assets', action='store_true',
@@ -127,11 +133,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument('--sync-weekly-result-base', action='store_true',
                     help='从正式快照初始化/同步独立结果表 A:G（必须 --confirm）')
     ap.add_argument('--weekly-run', action='store_true',
-                    help='新批次复制最新周报；刷新固定结果表A:G和H:O')
+                    help='新批次复制周报；刷新固定结果表A:G、H:M、N:T和U:V')
     ap.add_argument('--notify-manager-only', action='store_true',
                     help='本次正式运行只通知 feishu_manager_open_id；不改变默认协作者范围')
     ap.add_argument('--weekly-push-only', action='store_true',
-                    help='用当前有效weekly-run结果恢复固定表A:O（必须 --run-id --confirm）')
+                    help='用当前有效weekly-run结果恢复固定表A:V（必须 --run-id --confirm）')
     ap.add_argument('--amazon-poc-marketplace', choices=('US', 'CA'), default=None,
                     help='R1.7 单 ASIN Amazon 页面 PoC Marketplace')
     ap.add_argument('--amazon-poc-asin', default=None,
@@ -846,14 +852,14 @@ def create_snapshot_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
 
 
 RESULT_HEADERS = [
-    'ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式', '本周折扣值', '目标成交价',
-    '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '时间戳',
-    'HTML链接', '币种', 'Amazon链接',
+    'ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式', '本周折扣%', '目标成交价',
+    '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '币种',
+    *FRONTEND_HEADERS, '时间戳', 'Amazon链接',
 ]
 
 
 def create_result_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
-    """R1.3：创建独立 TEST 结果表，只写测试子表 A2:P2。"""
+    """R1.3：创建独立 TEST 结果表，只写测试子表 A2:V2。"""
     p(logger, '===== R1.3 TEST 独立结果 Spreadsheet PoC =====')
     started = time.monotonic()
     prefix = 'TEST_独立结果表_'
@@ -892,17 +898,17 @@ def create_result_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
         sheet_id = fc.add_sheet(token, 'TEST_RESULT', len(sheets))
         p(logger, f'已创建测试结果子表: TEST_RESULT ({sheet_id})')
 
-    current = fc.read_values(token, sheet_id, 'A2:P2')
+    current = fc.read_values(token, sheet_id, 'A2:V2')
     if current and any(str(cell or '').strip() for cell in current[0]):
-        if current[0][:16] != RESULT_HEADERS:
-            raise RuntimeError('TEST_RESULT A2:P2 已有非本规格内容，停止覆盖')
+        if current[0][:len(RESULT_HEADERS)] != RESULT_HEADERS:
+            raise RuntimeError('TEST_RESULT A2:V2 已有非本规格内容，停止覆盖')
     else:
         write_started = time.monotonic()
-        fc.write_values(token, sheet_id, 'A2:P2', [RESULT_HEADERS])
-        p(logger, f'A2:P2 写入耗时: {time.monotonic() - write_started:.3f}s')
-    verified = fc.read_values(token, sheet_id, 'A2:P2')
-    if not verified or verified[0][:16] != RESULT_HEADERS:
-        raise RuntimeError('结果表 A2:P2 回读与固定 16 列表头不一致')
+        fc.write_values(token, sheet_id, 'A2:V2', [RESULT_HEADERS])
+        p(logger, f'A2:V2 写入耗时: {time.monotonic() - write_started:.3f}s')
+    verified = fc.read_values(token, sheet_id, 'A2:V2')
+    if not verified or verified[0][:len(RESULT_HEADERS)] != RESULT_HEADERS:
+        raise RuntimeError('结果表 A2:V2 回读与固定 22 列表头不一致')
 
     # 三个受保护资源必须保持相互独立。
     source_token, _ = fc.resolve_wiki_obj(cfg['feishu_target_wiki'])
@@ -911,13 +917,13 @@ def create_result_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
     url = file_info.get('url') or f'https://wit0jhu6kvu.feishu.cn/sheets/{token}'
     record_path.write_text(json.dumps({
         'name': title, 'token_masked': masked, 'url': url, 'sheet_id': sheet_id,
-        'status': 'validated', 'header_range': 'A2:P2',
+        'status': 'validated', 'header_range': 'A2:V2',
         'header_count': len(RESULT_HEADERS), 'validated_at': datetime.now().isoformat(),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     p(logger, f'结果 Spreadsheet: {masked} | Sheet: TEST_RESULT ({sheet_id})')
     p(logger, f'结果表 URL: {url}')
     p(logger, f'总耗时: {time.monotonic() - started:.3f}s')
-    p(logger, '===== R1.3 PoC 通过：仅写入新建 TEST 结果表 A2:P2 =====')
+    p(logger, '===== R1.3 PoC 通过：仅写入新建 TEST 结果表 A2:V2 =====')
 
 
 def initialize_week_flow(fc: FeishuClient, cfg: dict, logger,
@@ -1154,18 +1160,138 @@ def _notify_run_collaborators(fc, cfg, logger, run_id, text, out,
                           local_data_open_id=cfg.get('feishu_manager_open_id', ''))
 
 
+def _feedback_report_base(status: str, *, reason: str = '') -> dict:
+    report = {
+        'feedback_status': status,
+        'feedback_rows_seen': 0,
+        'feedback_rows_eligible': 0,
+        'feedback_rows_detail_complete': 0,
+        'feedback_rows_written': 0,
+        'feedback_rows_expired_deleted': 0,
+        'feedback_rows_invalid_date_dropped': 0,
+        'feedback_store_status': {},
+        'feedback_store_elapsed_seconds': {},
+        'feedback_window_type': '',
+        'feedback_sheet_readback': {'status': 'not_configured'},
+        'feedback_elapsed_seconds': 0.0,
+    }
+    if reason:
+        report['feedback_error'] = str(reason)[:1000]
+    return report
+
+
+def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> dict:
+    """Run independent Feedback collection only in the weekday 07:30 slot."""
+    feedback_cfg = cfg.get('feedback') or {}
+    slot = getattr(args, 'scheduled_slot', 'manual') or 'manual'
+    if slot not in ('monday_0730', 'weekday_0730'):
+        return _feedback_report_base('skipped_schedule', reason=f'仅07:30槽位运行，当前={slot}')
+    if not feedback_cfg.get('enabled'):
+        return _feedback_report_base('not_configured', reason='feedback.enabled=false')
+
+    started = time.monotonic()
+    evidence_base = Path(str(feedback_cfg.get('evidence_root') or OUTPUT_DIR / 'feedback'))
+    if not evidence_base.is_absolute():
+        evidence_base = PROJECT_ROOT / evidence_base
+    evidence_root = evidence_base / run_id
+    state_path = Path(str(feedback_cfg.get('state_path') or evidence_base / 'feedback_state.json'))
+    if not state_path.is_absolute():
+        state_path = PROJECT_ROOT / state_path
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    try:
+        from seller_feedback import run_feedback_pipeline
+        from seller_feedback_browser import build_feedback_collectors
+        collectors = build_feedback_collectors(feedback_cfg)
+        should_write = not args.dry_run and not args.fetch_only
+        raw = run_feedback_pipeline(
+            fc=fc,
+            run_id=run_id,
+            collectors=collectors,
+            evidence_dir=evidence_root,
+            state_path=state_path,
+            spreadsheet_token=str(feedback_cfg.get('target_spreadsheet_token') or ''),
+            sheet_id=str(feedback_cfg.get('target_sheet_id') or ''),
+            initial_days=int(feedback_cfg.get('initial_window_days', 7)),
+            incremental_days=int(feedback_cfg.get('incremental_window_days', 3)),
+            retention_days=int(feedback_cfg.get('retention_days', 10)),
+            max_rating=int(feedback_cfg.get('max_rating', 3)),
+            store_order=feedback_cfg.get('store_order') or ('store_a', 'store_b'),
+            write=should_write,
+        )
+        sheet = raw.get('sheet') or {}
+        result = _feedback_report_base(raw.get('status') or 'blocked')
+        result.update({
+            'feedback_rows_seen': raw.get('feedback_rows_seen', 0),
+            'feedback_rows_eligible': raw.get('feedback_rows_eligible', 0),
+            'feedback_rows_detail_complete': raw.get('feedback_rows_detail_complete', 0),
+            'feedback_rows_written': raw.get('feedback_rows_written', 0),
+            'feedback_rows_expired_deleted': sheet.get('feedback_rows_expired_deleted', 0),
+            'feedback_rows_invalid_date_dropped': sheet.get('feedback_rows_invalid_date_dropped', 0),
+            'feedback_store_status': {
+                key: item.get('status') for key, item in (raw.get('stores') or {}).items()
+            },
+            'feedback_store_elapsed_seconds': {
+                key: item.get('elapsed_seconds', 0.0)
+                for key, item in (raw.get('stores') or {}).items()
+            },
+            'feedback_window_type': (raw.get('window') or {}).get('mode', ''),
+            'feedback_sheet_readback': sheet.get('readback') or {'status': sheet.get('status')},
+            'feedback_window': raw.get('window') or {},
+            'feedback_state_advanced': bool(raw.get('state_advanced')),
+            'feedback_elapsed_seconds': raw.get('elapsed_seconds', 0.0),
+            'feedback_evidence_root': str(evidence_root),
+        })
+        p(logger, '[Feedback] status=' + str(result['feedback_status'])
+          + ' stores=' + json.dumps(result['feedback_store_status'], ensure_ascii=False)
+          + ' rows_seen=' + str(result['feedback_rows_seen'])
+          + ' rows_written=' + str(result['feedback_rows_written'])
+          + ' elapsed=' + str(result['feedback_elapsed_seconds']) + 's')
+        return result
+    except Exception as exc:
+        elapsed = round(time.monotonic() - started, 3)
+        result = _feedback_report_base(
+            'auth_error' if any(term in str(exc).lower()
+                                for term in (
+                                    'auth', 'login', 'cookie', 'signin', 'apikey',
+                                    'api key', 'keychain', 'credential', '验证码'))
+            else 'blocked',
+            reason=f'{type(exc).__name__}: {exc}',
+        )
+        result.update({
+            'feedback_elapsed_seconds': elapsed,
+            'feedback_evidence_root': str(evidence_root),
+        })
+        p(logger, '[Feedback] 已停止：' + json.dumps({
+            'status': result['feedback_status'],
+            'error': result.get('feedback_error', ''),
+            'elapsed_seconds': elapsed,
+        }, ensure_ascii=False))
+        return result
+
+
 def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logger) -> None:
     """Price-only daily flow; HTML services are never a prerequisite."""
     from datetime import timedelta, timezone
     started = time.monotonic()
     started_at = datetime.now()
     cfg = price_only_config(cfg)
+    store = WeeklyAssetStore(OUTPUT_DIR / 'weekly_runs')
     registry = fc.inspect_weekly_registry(
         cfg['weekly_registry_url'], cfg.get('weekly_registry_sheet_id', ''))
-    selection = select_current_registry_row(
+    scheduled_slot = getattr(args, 'scheduled_slot', 'manual') or 'manual'
+    previous_period_id = ''
+    if scheduled_slot != 'manual':
+        fixed = store.fixed_result() or {}
+        previous_period_id = str(fixed.get('period_id') or '')
+    selection = select_for_scheduled_slot(
         registry['records'], datetime.now(timezone(timedelta(hours=8))),
-        cfg['feishu_allowed_hosts'])
-    store = WeeklyAssetStore(OUTPUT_DIR / 'weekly_runs')
+        cfg['feishu_allowed_hosts'], scheduled_slot, previous_period_id)
+    p(logger, f'[来源选择] slot={selection.scheduled_slot} '
+      f'mode={selection.selection_mode} period={selection.period_id} '
+      f'登记行={selection.row_number}')
+    if selection.pending_period_change:
+        p(logger, '[来源选择] pending_period_change=' +
+          json.dumps(selection.pending_period_change, ensure_ascii=False))
     if not args.dry_run and not args.fetch_only:
         assert_registry_fresh(
             store, selection, datetime.now(timezone(timedelta(hours=8))),
@@ -1174,6 +1300,19 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
                                  allow_create=not args.dry_run and not args.fetch_only,
                                  run_id=(run_id := _price_run_id(store, selection.period_id, args)),
                                  resume=bool(getattr(args, 'resume', False) or getattr(args, 'run_id', None)))
+    manifest.update(
+        scheduled_slot=selection.scheduled_slot,
+        selection_mode=selection.selection_mode,
+        selection_row_number=selection.row_number,
+        pending_period_change=selection.pending_period_change,
+        feedback_status='not_configured',
+        feedback_rows_seen=0,
+        feedback_rows_written=0,
+        feedback_store_status={},
+        feedback_sheet_readback={'status': 'not_configured'},
+    )
+    if not args.dry_run and not args.fetch_only:
+        store.save(selection.period_id, manifest)
     selected = [item for item in manifest['sheet_mappings']
                 if not getattr(args, 'sheets', '') or item['result_sheet'] in set(sheets)]
     cfg['sheet_profiles'] = {item['result_sheet']: item['marketplace'] for item in selected}
@@ -1207,8 +1346,24 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
             for sheet, items in invalid_by_sheet.items()
         }
     if args.limit:
-        rows_by_sheet = {sheet: rows[:args.limit]
-                         for sheet, rows in rows_by_sheet.items()}
+        # Limit the first N source rows, not N valid rows plus all invalid
+        # rows.  Otherwise a field-matching sample can silently expand when
+        # source_data_invalid records are present after the valid subset.
+        limited_rows = {}
+        limited_invalid = {}
+        for sheet in set(rows_by_sheet) | set(invalid_by_sheet):
+            candidates = [
+                (row.row_num, 'valid', row)
+                for row in rows_by_sheet.get(sheet, [])
+            ] + [
+                (item['report_row'].row_num, 'invalid', item)
+                for item in invalid_by_sheet.get(sheet, [])
+            ]
+            chosen = sorted(candidates, key=lambda item: item[0])[:args.limit]
+            limited_rows[sheet] = [item[2] for item in chosen if item[1] == 'valid']
+            limited_invalid[sheet] = [item[2] for item in chosen if item[1] == 'invalid']
+        rows_by_sheet = {sheet: rows for sheet, rows in limited_rows.items() if rows}
+        invalid_by_sheet = {sheet: items for sheet, items in limited_invalid.items() if items}
     if not rows_by_sheet and not any(invalid_by_sheet.values()) and (args.asins or args.limit):
         raise RuntimeError('本次筛选没有可处理的 ASIN')
     if not args.dry_run and not args.fetch_only:
@@ -1226,10 +1381,25 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     results_by_sheet = {}
     out = OUTPUT_DIR / 'daily_runs' / datetime.now().strftime('%Y-%m-%d')
     bundle_path = out / f'{run_id}_weekly_bundle.json'
+    # Intermediate price checkpoints are written before the independent
+    # Feedback stage; keep the interim state explicit rather than calling it a
+    # successful Feedback result.
+    feedback_report = _feedback_report_base('not_configured')
     def save_bundle():
+        frontend_counts = frontend_status_counts(
+            [cr for values in results_by_sheet.values() for cr in values])
         atomic_json(bundle_path, {
-            'schema_version': 2, 'run_id': run_id, 'period_id': selection.period_id,
+            'schema_version': 3, 'run_id': run_id, 'period_id': selection.period_id,
+            'source_period_id': selection.period_id,
+            'scheduled_slot': selection.scheduled_slot,
+            'selection_mode': selection.selection_mode,
+            'selection_row_number': selection.row_number,
+            'pending_period_change': selection.pending_period_change,
             'parser_rule_version': cfg['parser_rule_version'],
+            'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
+            'frontend_checks_written': sum(len(values) for values in results_by_sheet.values()),
+            'frontend_check_status_counts': frontend_counts,
+            **feedback_report,
             'price_tolerance': str(cfg['price_tolerance']),
             'source_fingerprints': fingerprints,
             'snapshot_spreadsheet_token': manifest['snapshot']['spreadsheet_token'],
@@ -1271,6 +1441,10 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not args.asins and not args.limit:
         for item in selected:
             results_by_sheet.setdefault(item['result_sheet'], [])
+    feedback_report = _run_feedback_stage(fc, cfg, run_id, args, logger, out)
+    manifest['feedback_report'] = feedback_report
+    if not args.dry_run and not args.fetch_only:
+        store.save(selection.period_id, manifest)
     save_bundle()
     error_ratio = summarize(results_by_sheet, cfg, logger)
     should_write = not args.dry_run and not args.fetch_only
@@ -1282,12 +1456,23 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     report = {'run_id': run_id, 'written_rows': 0, 'blocked': [], 'failures': []}
     if should_write:
         report = _deliver_weekly_results(fc, store, manifest, run_id, results_by_sheet, cfg, out)
-        p(logger, f'[weekly-run] H:O 写入 {report["written_rows"]} 行，'
-                  f'阻断 {len(report["blocked"])} 行')
+        report.update(feedback_report)
+        # _deliver_weekly_results checkpoints price progress itself; append the
+        # independent Feedback state to the final delivery evidence as well.
+        atomic_json(out / f'{run_id}_delivery.json', report)
+        p(logger, f'[weekly-run] H:V 写入 {report["written_rows"]} 行，'
+              f'阻断 {len(report["blocked"])} 行')
     else:
         p(logger, '[weekly-run] dry/fetch-only：未写飞书')
     (out / f'{run_id}_weekly_summary.json').write_text(json.dumps({
         **report, 'period_id': selection.period_id,
+        'source_period_id': selection.period_id,
+        'scheduled_slot': selection.scheduled_slot,
+        'selection_mode': selection.selection_mode,
+        'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
+        'frontend_check_status_counts': frontend_status_counts(
+            [cr for values in results_by_sheet.values() for cr in values]),
+        **feedback_report,
         'elapsed_seconds': round(time.monotonic() - started, 3),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     if not args.dry_run and not args.fetch_only:
@@ -1295,12 +1480,18 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
         elapsed = time.monotonic() - started
         text = completion_text(
             period_id=selection.period_id, run_id=run_id,
+            source_period_id=selection.period_id,
+            selection_mode=selection.selection_mode,
+            scheduled_slot=selection.scheduled_slot,
             started_at=started_at.isoformat(timespec='seconds'),
             finished_at=datetime.now().isoformat(timespec='seconds'),
             elapsed_seconds=elapsed, sheet_count=len(results_by_sheet),
             written_rows=report['written_rows'], blocked_count=len(report['blocked']),
             error_ratio=error_ratio, result_name=manifest['result']['name'],
-            result_url=manifest['result']['url'], local_data=str(bundle_path))
+            result_url=manifest['result']['url'], local_data=str(bundle_path),
+            frontend_status_counts=frontend_status_counts(
+                [cr for values in results_by_sheet.values() for cr in values]),
+            feedback_status=feedback_report['feedback_status'])
         text = _delivery_notice(text, report)
         _notify_run_collaborators(fc, cfg, logger, run_id, text, out,
                                   manager_only=bool(getattr(args, 'notify_manager_only', False)))
@@ -1404,7 +1595,11 @@ def _load_weekly_push_results(run_id: str, sheets: list[str], manifest: dict,
         raise RuntimeError(f'发现多个同 run_id weekly bundle: {run_id}')
     if bundle_matches:
         bundle = json.loads(bundle_matches[0].read_text(encoding='utf-8'))
-        if bundle.get('schema_version') != 2 or bundle.get('run_id') != run_id:
+        # schema 2 is retained for previously validated recovery bundles;
+        # schema 3 is the current A:V/frontend/Feedback-aware bundle.  Old
+        # records restore missing frontend evidence as explicit unknown rather
+        # than being reinterpreted as current checks.
+        if bundle.get('schema_version') not in (2, 3) or bundle.get('run_id') != run_id:
             raise RuntimeError('weekly bundle schema 或 run_id 不匹配')
         if cfg is not None:
             validate_recovery_metadata(bundle, cfg)
@@ -1467,7 +1662,7 @@ def _load_weekly_push_results(run_id: str, sheets: list[str], manifest: dict,
 
 
 def weekly_push_only_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logger) -> None:
-    """Price-only recovery of the same snapshot and run, verified H:O writes."""
+    """Price/frontend recovery of the same snapshot and run, verified H:V writes."""
     from datetime import timedelta, timezone
     started = time.monotonic()
     started_at = datetime.now()

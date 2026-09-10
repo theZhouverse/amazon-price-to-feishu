@@ -49,14 +49,17 @@ class LightweightEvidenceTests(unittest.TestCase):
 
 class FullCapacityMaintenanceTests(unittest.TestCase):
     def test_legacy_writer_finds_asin_after_row_2000(self):
-        asins = [f'B0{i:08d}' for i in range(2001)]
+        target = 'B000002000'
+        # Keep only the target ASIN at physical row 2003.  The writer must
+        # discover it beyond the historical 2000-row boundary without
+        # requiring unrelated rows to be part of this recovery batch.
+        asins = [''] * 2000 + [target]
         fc = FakeFeishu(asins=asins)
-        target = asins[-1]
         report = write_weekly_result_columns(
             fc, manifest(), 'run1', {'PD03': [result(target, archive=False)]},
             {'html_archive_required': False})
         self.assertEqual(report['written_rows'], 1)
-        self.assertTrue(any(rng == 'H2003:O2003' for _, _, rng, _ in fc.writes))
+        self.assertTrue(any(rng == 'H2003:V2003' for _, _, rng, _ in fc.writes))
 
 
 class SchedulerPolicyTests(unittest.TestCase):

@@ -244,8 +244,14 @@ def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_in
         }
         manifest['status'] = 'ready'
         manifest['validated_at'] = datetime.now().isoformat()
-        result_access = ({'reused': True, 'fixed_result': True} if fixed else
-                         fc.ensure_permission_member(result_token, 'sheet', manager_open_id))
+        # The fixed result spreadsheet is still an application-owned delivery
+        # resource.  It may predate the automatic-grant rule, so reusing it
+        # must also enforce and read back the manager permission instead of
+        # treating its existing state as proof of access.
+        result_access = fc.ensure_permission_member(
+            result_token, 'sheet', manager_open_id)
+        if fixed:
+            result_access['fixed_result'] = True
         manifest['human_manager'] = {
             'member_type': 'openid', 'member_id': manager_open_id,
             'perm': 'full_access', 'snapshot': snapshot_access,

@@ -21,8 +21,8 @@ class WeeklyExecutionTest(unittest.TestCase):
         class FixedTable(BaseFake):
             def __init__(self):
                 super().__init__({'s1': source(row('B000000001'))}, with_result=True)
-                self.grid = [['title'], RESULT_HEADERS + [''],
-                             ['B000000001'] + ['old'] * 15, ['B000000002'] + ['old'] * 15]
+                self.grid = [['title'], RESULT_HEADERS,
+                             ['B000000001'] + ['old'] * 20, ['B000000002'] + ['old'] * 20]
             def read_values(self, token, sid, rng):
                 if token == 'snapshot':
                     return super().read_values(token, sid, rng)
@@ -49,10 +49,10 @@ class WeeklyExecutionTest(unittest.TestCase):
             sync_weekly_result_base(fc, store, 'seq-3', CFG, 'run1',
                                    staged_results={'PD03': [result('B000000001')]})
             self.assertEqual(len(fc.writes), 1)
-            self.assertEqual(fc.writes[0][1], 'A2:P4')
+            self.assertEqual(fc.writes[0][1], 'A2:V4')
             self.assertEqual(fc.grid[2][0], 'B000000001')
-            self.assertEqual(fc.grid[2][13], 'USD')
-            self.assertEqual(fc.grid[3], [''] * 16)
+            self.assertEqual(fc.grid[2][12], 'USD')
+            self.assertEqual(fc.grid[3], [''] * 22)
             self.assertFalse(store.load('seq-3')['base_sync_pending'])
 
     def test_old_lock_marker_does_not_block_restart(self):
@@ -102,6 +102,26 @@ class WeeklyExecutionTest(unittest.TestCase):
                     execution.ensure_price_week(Mock(), WeeklyAssetStore(Path(root)),
                         SimpleNamespace(period_id='seq-3', source_url='url'), {}, {}, allow_create=False)
                 init.assert_not_called()
+
+    def test_frontend_dry_run_uses_ready_snapshot_copy(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = WeeklyAssetStore(Path(root))
+            manifest = {
+                'period_id': 'seq-4', 'status': 'ready',
+                'mapping_ready': True, 'link_rules_ready': True,
+                'source': {'url': 'registry-source'},
+                'snapshot': {'spreadsheet_token': 'frozen-copy'},
+                'result': {'spreadsheet_token': 'fixed-result'},
+            }
+            store.save('seq-4', manifest)
+            execution.atomic_json(store.root / 'fixed_result.json', {
+                'spreadsheet_token': 'fixed-result', 'url': 'fixed-url'})
+            selection = SimpleNamespace(period_id='seq-4', source_url='registry-source')
+            preview = execution._prepare_price_run(
+                Mock(), store, selection, {}, {}, 'frontend-run', False, False)
+            self.assertEqual(preview['snapshot']['spreadsheet_token'], 'frozen-copy')
+            self.assertEqual(preview['snapshot_run_id'], 'frontend-run')
+            self.assertTrue(preview['readonly_preview'])
 
     def test_resume_same_manifest_can_reclaim_pointer_after_preclaim_failure(self):
         with tempfile.TemporaryDirectory() as root:
@@ -184,7 +204,9 @@ class WeeklyExecutionTest(unittest.TestCase):
                 if failure_stage == 'fixed_result':
                     self.assertEqual(data['result']['spreadsheet_token'], 'fixed-token')
                     self.assertEqual(data['result']['url'], 'fixed-url')
-                    self.assertTrue(all(c.args[0] == 'snap' for c in fc.ensure_permission_member.call_args_list))
+                    permission_tokens = [c.args[0] for c in fc.ensure_permission_member.call_args_list]
+                    self.assertIn('snap', permission_tokens)
+                    self.assertIn('fixed-token', permission_tokens)
 
     def test_price_flow_ignores_html_and_rename_failure_still_notifies(self):
         with tempfile.TemporaryDirectory() as root:
@@ -223,7 +245,9 @@ class WeeklyExecutionTest(unittest.TestCase):
                 self.assertEqual(run_cfg['sheet_profiles'][sheet], 'CA')
                 return [result('B000000001', archive=False)]
             with patch.object(main, 'OUTPUT_DIR', output), \
-                 patch.object(main, 'select_current_registry_row', return_value=SimpleNamespace(period_id='seq-2', source_url='url')), \
+                 patch.object(main, 'select_for_scheduled_slot', return_value=SimpleNamespace(
+                     period_id='seq-2', source_url='url', scheduled_slot='manual',
+                     selection_mode='manual', row_number=0, pending_period_change=None)), \
                  patch.object(main, '_read_source_plan', return_value=plans), \
                  patch.object(main, 'make_run_id', return_value='run1'), \
                  patch.object(main, 'ensure_price_week', return_value=data), \
