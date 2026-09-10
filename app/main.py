@@ -1307,6 +1307,7 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
                                  run_id=(run_id := _price_run_id(store, selection.period_id, args)),
                                  resume=bool(getattr(args, 'resume', False) or getattr(args, 'run_id', None)))
     manifest.update(
+        source_period_id=selection.period_id,
         scheduled_slot=selection.scheduled_slot,
         selection_mode=selection.selection_mode,
         selection_row_number=selection.row_number,
@@ -1449,6 +1450,7 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
             results_by_sheet.setdefault(item['result_sheet'], [])
     feedback_report = _run_feedback_stage(fc, cfg, run_id, args, logger, out)
     manifest['feedback_report'] = feedback_report
+    manifest.update(feedback_report)
     if not args.dry_run and not args.fetch_only:
         store.save(selection.period_id, manifest)
     save_bundle()
@@ -1608,7 +1610,8 @@ def _load_weekly_push_results(run_id: str, sheets: list[str], manifest: dict,
         if bundle.get('schema_version') not in (2, 3) or bundle.get('run_id') != run_id:
             raise RuntimeError('weekly bundle schema 或 run_id 不匹配')
         if cfg is not None:
-            validate_recovery_metadata(bundle, cfg)
+            validate_recovery_metadata(
+                bundle, cfg, frontend_rule_version=FRONTEND_CHECK_RULE_VERSION)
             validate_record_ages([r for sheet in sheets for r in (bundle.get('sheets') or {}).get(sheet, [])], cfg)
             if manifest.get('source_fingerprints') is not None and bundle.get('source_fingerprints') != manifest['source_fingerprints']:
                 raise RuntimeError('恢复bundle源字段指纹不一致，禁止混用旧价格')
@@ -1634,7 +1637,8 @@ def _load_weekly_push_results(run_id: str, sheets: list[str], manifest: dict,
             if meta.get('schema_version') != SCHEMA_VERSION or meta.get('snapshot_id') != run_id:
                 raise RuntimeError(f'[{sheet}] 缓存 schema 或 snapshot_id 不匹配')
             if cfg is not None:
-                validate_recovery_metadata(meta, cfg)
+                validate_recovery_metadata(
+                    meta, cfg, frontend_rule_version=FRONTEND_CHECK_RULE_VERSION)
                 validate_record_ages((meta.get('records') or {}).values(), cfg)
             crawls = records_to_crawls(meta)
             if crawls:

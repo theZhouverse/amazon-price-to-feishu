@@ -76,11 +76,24 @@ class SchedulerPolicyTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         installer = (root / 'bin' / 'schedule.ps1').read_text(encoding='utf-8')
         launcher = root / 'bin' / 'hidden_ps1.vbs'
+        runner = (root / 'bin' / 'scheduled_run.ps1').read_text(encoding='utf-8')
         scheduled_bat = (root / 'bin' / 'scheduled_run.bat').read_text(encoding='utf-8')
         self.assertTrue(launcher.is_file())
         self.assertIn("New-ScheduledTaskAction -Execute 'wscript.exe'", installer)
         self.assertIn('hidden_ps1.vbs', installer)
+        for task_name, slot in (
+                ('AmazonDaily_0730', 'monday_0730'),
+                ('AmazonDaily_0730_weekday', 'weekday_0730'),
+                ('AmazonDaily_1530', 'monday_1530'),
+                ('AmazonDaily_1530_weekday', 'weekday_1530')):
+            self.assertIn(task_name, installer)
+            self.assertIn(slot, installer)
+        self.assertIn("'--scheduled-slot' $ScheduledSlot", runner)
+        self.assertIn('[Console]::OutputEncoding = $utf8', runner)
+        self.assertIn("$env:PYTHONUTF8 = '1'", runner)
+        self.assertIn('WScript.Arguments.Count - 1', launcher.read_text(encoding='utf-8'))
         self.assertIn('wscript.exe //B //NoLogo', scheduled_bat)
+        self.assertIn('%*', scheduled_bat)
         self.assertIn('WindowStyle Hidden', launcher.read_text(encoding='utf-8'))
 
 

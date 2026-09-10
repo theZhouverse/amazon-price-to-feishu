@@ -11,17 +11,25 @@ from datetime import datetime
 from pathlib import Path
 
 from config import SNAPSHOT_DIR, CACHE_ROOT
+from frontend_checks import FRONTEND_CHECK_RULE_VERSION
 from models import CrawlResult, PageStatus, ReportRow
 from runtime_state import atomic_json
 
-SCHEMA_VERSION = 6  # invalidates results captured without same-page frontend checks
+SCHEMA_VERSION = 7  # invalidates caches captured under older frontend rules
 
-def validate_recovery_metadata(meta, cfg):
+def validate_recovery_metadata(meta, cfg, *, frontend_rule_version: str | None = None):
     """Do not publish stale calculations after a parser or tolerance change."""
     if meta.get('parser_rule_version') != cfg.get('parser_rule_version'):
         raise RuntimeError('恢复数据解析规则版本不一致，请重新抓取')
     if str(meta.get('price_tolerance')) != str(cfg.get('price_tolerance')):
         raise RuntimeError('恢复数据价格容差不一致，请重新抓取')
+    # Schema 3 weekly bundles contain frontend evidence.  Once a selector or
+    # business rule changes, a prior bundle must not be silently reinterpreted
+    # as if it had been produced by the new rule version.  Schema 2 remains a
+    # legacy price-only bundle and is restored without inventing frontend data.
+    if frontend_rule_version and meta.get('schema_version') == 3:
+        if meta.get('frontend_check_rule_version') != frontend_rule_version:
+            raise RuntimeError('恢复数据前端检查规则版本不一致，请重新抓取')
     try:
         created = datetime.fromisoformat(meta['created_at'])
         age = (datetime.now(created.tzinfo) - created).total_seconds() / 3600
@@ -103,6 +111,7 @@ def save_sheet_cache(run_id: str, sheet: str, rows: list[ReportRow],
     path = cache_dir(run_id) / f'{sheet}.json'
     data = {
         'schema_version': SCHEMA_VERSION,
+        'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
         'parser_rule_version': cfg['parser_rule_version'],
         'snapshot_id': run_id,
         'sheet': sheet,
@@ -135,6 +144,8 @@ def is_cache_valid(meta: dict | None, cfg: dict, sheet: str,
     if not meta:
         return False
     if meta.get('schema_version') != SCHEMA_VERSION:
+        return False
+    if meta.get('frontend_check_rule_version') != FRONTEND_CHECK_RULE_VERSION:
         return False
     if meta.get('parser_rule_version') != cfg['parser_rule_version']:
         return False

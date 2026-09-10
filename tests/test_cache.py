@@ -15,6 +15,7 @@ from cache import (
 )
 from models import CrawlResult, PageStatus, ReportRow
 from config import DEFAULTS
+from frontend_checks import FRONTEND_CHECK_RULE_VERSION
 
 
 def mk_cfg(**kw):
@@ -63,6 +64,7 @@ class TestCacheValid(unittest.TestCase):
             # 直接构造 meta（避免依赖全局目录）
             meta = {
                 'schema_version': SCHEMA_VERSION,
+                'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
                 'parser_rule_version': DEFAULTS['parser_rule_version'],
                 'snapshot_id': run_id,
                 'sheet': 'PD03',
@@ -81,6 +83,9 @@ class TestCacheValid(unittest.TestCase):
             self.assertFalse(is_cache_valid(meta, mk_cfg(price_tolerance='1.00', html_archive_enabled=False), 'PD03', mk_rows()))
             # 规则版本不符
             self.assertFalse(is_cache_valid(meta, mk_cfg(parser_rule_version='old', html_archive_enabled=False), 'PD03', mk_rows()))
+            # 前端检查规则不符时必须重新抓取，不能复用旧的BSR/AC判定
+            stale_frontend = dict(meta, frontend_check_rule_version='2026-09-10-v13')
+            self.assertFalse(is_cache_valid(stale_frontend, cfg, 'PD03', mk_rows()))
             # 源数据变化
             rows2 = mk_rows()
             rows2[0].normal_price = Decimal('55.00')
@@ -89,6 +94,7 @@ class TestCacheValid(unittest.TestCase):
     def test_expired(self):
         meta = {
             'schema_version': SCHEMA_VERSION,
+            'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
             'parser_rule_version': DEFAULTS['parser_rule_version'],
             'snapshot_id': 'r', 'sheet': 'PD03',
             'asin_signature': data_signature(mk_rows()),
@@ -105,6 +111,7 @@ class TestCacheValid(unittest.TestCase):
     def test_enabled_archive_cache_requires_existing_file(self):
         meta = {
             'schema_version': SCHEMA_VERSION,
+            'frontend_check_rule_version': FRONTEND_CHECK_RULE_VERSION,
             'parser_rule_version': DEFAULTS['parser_rule_version'],
             'snapshot_id': 'r', 'sheet': 'PD03',
             'asin_signature': data_signature(mk_rows()),

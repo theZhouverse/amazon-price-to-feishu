@@ -3,7 +3,7 @@ Option Explicit
 ' GUI-subsystem launcher for Windows Task Scheduler.  Calling PowerShell from
 ' a .bat file can briefly create a visible cmd.exe window; wscript.exe does
 ' not create a console and waits for the real exit code.
-Dim fso, shell, scriptPath, commandLine, exitCode, quote
+Dim fso, shell, scriptPath, commandLine, exitCode, quote, i, argument
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 quote = Chr(34)
@@ -20,5 +20,9 @@ End If
 shell.CurrentDirectory = fso.GetParentFolderName(fso.GetParentFolderName(scriptPath))
 commandLine = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " _
               & quote & scriptPath & quote
+For i = 1 To WScript.Arguments.Count - 1
+    argument = Replace(CStr(WScript.Arguments(i)), quote, quote & quote)
+    commandLine = commandLine & " " & quote & argument & quote
+Next
 exitCode = shell.Run(commandLine, 0, True)
 WScript.Quit exitCode

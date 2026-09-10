@@ -1,3 +1,8 @@
+param(
+    [ValidateSet('manual', 'monday_0730', 'monday_1530', 'weekday_0730', 'weekday_1530')]
+    [string]$ScheduledSlot = 'manual'
+)
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
@@ -10,10 +15,14 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     exit 2
 }
 Set-Location -LiteralPath $projectRoot
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
 $env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUTF8 = '1'
 # Python owns outputs/weekly_scheduler.lock for ALL CLI entrypoints.
 # Do not acquire the same lock twice (parent PowerShell + child Python).
-"[$($startedAt.ToString('o'))] START weekly-run --confirm" | Set-Content -LiteralPath $logPath -Encoding UTF8
+"[$($startedAt.ToString('o'))] START weekly-run --confirm --scheduled-slot $ScheduledSlot" | Set-Content -LiteralPath $logPath -Encoding UTF8
 $exitCode = 1
 $runnerError = $null
 try {
@@ -22,7 +31,7 @@ try {
     # this wrapper before it records the final END line.  Keep the wrapper
     # diagnostic path non-terminating and preserve Python's real exit code.
     $ErrorActionPreference = 'Continue'
-    & $python 'app\main.py' '--weekly-run' '--confirm' 2>&1 | Out-File -LiteralPath $logPath -Encoding utf8 -Append
+    & $python 'app\main.py' '--weekly-run' '--confirm' '--scheduled-slot' $ScheduledSlot 2>&1 | Out-File -LiteralPath $logPath -Encoding utf8 -Append
     if ($null -ne $LASTEXITCODE) {
         $exitCode = [int]$LASTEXITCODE
     }

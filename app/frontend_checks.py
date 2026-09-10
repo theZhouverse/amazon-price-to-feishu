@@ -16,7 +16,7 @@ from decimal import Decimal
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v13'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v14'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -752,6 +752,17 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     choice_status = 'pass' if choice else 'fail'
     choice_reason = ("当前商品存在Amazon's Choice实际badge" if choice
                      else "当前商品的Amazon's Choice容器为空或不存在")
+    # The development SPEC treats the BSR/AC relationship as a product-level
+    # validity gate: both signals must belong to the requested ASIN, and the
+    # same ASIN cannot be published as having both.  Keep the raw observations
+    # and locators intact so the conflict remains diagnosable rather than
+    # looking like a selector miss.
+    if bsr and choice:
+        invalid_reason = (
+            f'同一 ASIN {requested_asin or str(asin or "").upper()} 同时存在 '
+            "BSR 和 Amazon's Choice，ASIN不合法")
+        bsr_status = choice_status = 'fail'
+        bsr_reason = choice_reason = invalid_reason
     size_result = _result(
         'size_consistent', observed or '', size_status, size_reason, size_locator, page_url)
     size_result['expected'] = expected

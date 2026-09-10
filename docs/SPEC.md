@@ -107,7 +107,7 @@ Windows、Python 3.10+、Chromium/DrissionPage。Python依赖以 `config/require
 - `.env.example` 仅列出 `FS_APP_SECRET`，不是第二套业务配置。JSON不得包含真实Secret或 `feishu_app_secret` 配置项。
 - 兼容凭证文件为两个非空行，App ID必须与JSON一致；不要同时维护多份本地Secret。
 - 正式任务的子表列表及Marketplace来自本批最新快照发现结果；旧静态sheets/sheet_profiles不是全量范围上限。
-- 前端检查中只有尺寸一致性需要使用当批周报的尺寸预期；尺寸比较必须把`8'X10'`与`8 x 10 ft`、`2.5'X8'`与`2'6\" x 8'`视为同一尺寸，并允许页面附带`(Rectangular)`等非尺寸描述；父ASIN发散按页面子体关系判断，其余图片、品牌故事、BSR、环保和Amazon's Choice指标均只判断当前页面是否存在，不与周报字段匹配。
+- 前端检查中只有尺寸一致性需要使用当批周报的尺寸预期；尺寸比较必须把`8'X10'`与`8 x 10 ft`、`2.5'X8'`与`2'6\" x 8'`视为同一尺寸，并允许页面附带`(Rectangular)`等非尺寸描述；父ASIN发散按页面子体关系判断，其余图片、品牌故事、BSR、环保和Amazon's Choice指标均只读取当前页面存在性，不与周报字段匹配；BSR与AC最后仍受同一当前ASIN的互斥唯一性门禁约束。
 - 历史`htmls/`和诊断HTML只用于前端检查的离线样本、选择器和证据定位匹配；不得把历史HTML当作当前运行页面，也不得用历史HTML直接生成本批N:T结果。
 - Feedback任务需要两个店铺的非敏感标识、各自Seller Central反馈管理器URL、凭证引用、固定目标子表身份和页面节奏配置；反馈管理器URL必须明确指向后台【反馈管理器】页面，不得改用商品Review、Q&A或前台评论页面。凭证引用只保存在本机Secret配置，店铺标识、脱敏来源URL和目标Sheet ID写入manifest用于审计。
 - Feedback窗口与留存配置固定为：首次成功运行回看最近7个自然日；后续成功运行回看当前运行时间往前3个自然日；结果表按反馈日期仅保留最近10个自然日。窗口日期统一使用`Asia/Shanghai`，首次窗口只有在两个店铺都完成到达窗口边界或明确记录了安全终止原因后才推进为后续3日窗口；部分失败不得把未完成的首次7日窗口伪装成增量窗口。
@@ -189,14 +189,14 @@ amazon_daily_structured_20260821/
 | N | 商品主图 | 当前商品主图区域存在有效图片来源时写`✅`；明确缺失写`❌`。只判断主图是否存在，不把品牌故事图片混入本列 |
 | O | 品牌故事 | 当前商品的A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块必须同时出现精确标题`From the brand`和该模块内有效图片时写`✅`；模块为空、标题缺失或图片缺失写`❌`。本列与N列独立，便于看出是哪一项缺失 |
 | P | 前端尺寸 | 页面当前选中商品尺寸与当批周报预期尺寸规范化后相同时写`✅`，不一致写`❌` |
-| Q | BSR | 只在当前请求ASIN绑定的商品详情表中查找`Best Sellers Rank`字段；排除导航、推荐、赞助和其他ASIN区域。找到当前商品字段写`✅`，明确没有写`❌`；不与AC结果互相否定 |
+| Q | BSR | 只在当前请求ASIN绑定的商品详情表中查找`Best Sellers Rank`字段；排除导航、推荐、赞助和其他ASIN区域。找到当前商品字段且未同时出现AC时写`✅`；明确没有或与AC同时出现导致ASIN不合法时写`❌` |
 | R | 父ASIN发散 | 页面正常且明确列出至少一个不同的子体/变体ASIN时写`✅`；当前ASIN页面没有任何子体时写`❌` |
 | S | 环保标 | 当前商品存在完整商品级 Climate Pledge Friendly 标志链时写`✅`；仅有空占位、品牌可持续文案或不完整容器时写`❌` |
-| T | AC标 | 只在当前请求ASIN绑定的可见`#acBadge_feature_div`商品模块中查找文本精确为`Amazon's Choice`的实际badge；同时支持该模块的可见Shadow DOM徽章文本；排除隐藏说明、推荐卡和其他ASIN区域。存在写`✅`，明确为空或不存在写`❌`；不与BSR结果互相否定 |
+| T | AC标 | 只在当前请求ASIN绑定的可见`#acBadge_feature_div`商品模块中查找文本精确为`Amazon's Choice`的实际badge；同时支持该模块的可见Shadow DOM徽章文本；排除隐藏说明、推荐卡和其他ASIN区域。存在且未同时出现BSR时写`✅`；明确为空、不存在或与BSR同时出现导致ASIN不合法时写`❌` |
 | U | 时间戳 | 本条抓取/计算时间；不是表名更新时间 |
 | V | Amazon链接 | 本商品标准URL |
 
-检查列的内部状态仍统一为`pass`、`fail`、`unknown`、`not_applicable`，但结果表只显示`✅`、`❌`或`-`：`pass`显示`✅`，`fail`显示`❌`，`unknown`和`not_applicable`显示`-`。这样表格便于业务查看，同时不把“证据不足/不适用”伪装成失败；bundle和本地诊断保留原始状态、观察值、原因和定位。P列“前端尺寸”是尺寸一致性结果的可见名称，本次仅重命名列头，不改变尺寸判定逻辑。N列主图与O列品牌故事独立输出；Q列BSR和T列AC标分别按当前ASIN作用域做存在性判断，不能因为两者同时出现在同一份DOM就互相否定。Page Not Found、身份不一致、导航失败、币种错误等整页门禁发生时，N:T全部显示`-`并在bundle中保留`unknown`，价格列仍按第17节阻断规则处理。检查证据写入bundle和本地诊断，至少包含检查名、观察值、状态、原因、页面ASIN/URL、抓取时间和规则版本。
+检查列的内部状态仍统一为`pass`、`fail`、`unknown`、`not_applicable`，但结果表只显示`✅`、`❌`或`-`：`pass`显示`✅`，`fail`显示`❌`，`unknown`和`not_applicable`显示`-`。这样表格便于业务查看，同时不把“证据不足/不适用”伪装成失败；bundle和本地诊断保留原始状态、观察值、原因和定位。P列“前端尺寸”是尺寸一致性结果的可见名称，本次仅重命名列头，不改变尺寸判定逻辑。N列主图与O列品牌故事独立输出；Q列BSR和T列AC标先分别按当前ASIN作用域提取，若同一当前ASIN同时存在两者，再按业务唯一性门禁将Q/T均置为`fail`并保留两项观察值、定位和“ASIN不合法”冲突原因。Page Not Found、身份不一致、导航失败、币种错误等整页门禁发生时，N:T全部显示`-`并在bundle中保留`unknown`，价格列仍按第17节阻断规则处理。检查证据写入bundle和本地诊断，至少包含检查名、观察值、状态、原因、页面ASIN/URL、抓取时间和规则版本。
 
 旧系统A:P中M为时间戳、N为HTML、O为币种、P为Amazon链接；旧A:O中M为时间戳、N为币种、O为Amazon链接。识别完全匹配的旧表头或当前A:V表头后才允许备份发布。迁移到新布局时，旧币种映射到当前M，旧时间戳映射到当前U，旧Amazon链接映射到当前V，旧HTML只备份并清理，N:T初始化为空，不得把旧HTML值当作新检查结果。新布局写入完整A:V，物理尾列不因迁移删除；未知表头不得覆盖。每批同样重新组合A:G，不能沿用旧目标价、旧SKU或旧检查结果。
 
@@ -270,11 +270,11 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 - 页面商品身份：在单项字段检查前，优先读取主商品`#title_feature_div[data-csa-c-asin]`，旧布局再回退到`#ASIN[value]`，并读取页面URL中的ASIN；至少必须存在一个可验证的当前商品身份锚点。若页面主商品ASIN或页面URL中的ASIN与请求ASIN不一致，或者两类身份锚点均缺失，N:T全部为`unknown`并显示`-`，不得从页面中其他商品模块拼接部分结果。
 - BSR：读取当前商品详情表的`th.prodDetSectionEntry`字段，字段文本规范化后必须精确等于`Best Sellers Rank`，祖先必须属于`#prodDetails`、`#productDetails_feature_div`或`.prodDetTable`，并且同一详情表的`ASIN`行必须等于当前请求ASIN；没有ASIN行时才允许使用该详情链上的`data-csa-c-asin`/`data-asin`作为回退。Amazon页面常把该详情表放在折叠的`.a-expander-content`中；只要该字段属于当前ASIN详情表，就计为存在，不把“折叠”误判为缺失。导航中的`Best Sellers`、推荐/广告/轮播或其他ASIN区域的文字不计入。该项只判断字段存在，不读取实时排名数值。
 - Amazon's Choice：只检查当前ASIN对应的`#acBadge_feature_div`，该容器或其祖先的`data-csa-c-asin`/`data-asin`必须包含当前请求ASIN，并且其可见后代节点必须有规范化后精确等于`Amazon's Choice`的实际badge文本。对现代页面若徽章仅存在于该容器的开放Shadow DOM，由同一次页面快照在浏览器侧递归检查该容器内所有可见后代（优先记录`.mvt-ac-badge-*`/`.ac-badge-*`节点）并回传带当前ASIN绑定的证据后再判定；不得以Shadow DOM中不可见或无法绑定ASIN的文本补齐。`a-popover-preload`、`aria-hidden=true`、`aok-hidden`、`aok-offscreen`及其他隐藏说明文本不计入；空占位容器、ASIN不一致的变体、导航、推荐商品或其他ASIN区域不计入。
-- BSR与Amazon's Choice的“唯一性”只要求各自归属于当前ASIN；两项是独立的存在性检查，不能因为同一份DOM同时出现两者就把ASIN判为不合法或互相改写为`fail`。页面身份门禁失败时七项统一为`unknown`并显示`-`。
+- BSR与Amazon's Choice先分别确认各自归属于当前ASIN；在此基础上，业务唯一性要求同一当前ASIN不能同时发布为同时具有BSR和AC。若两者同时存在，保留各自的`observed`与定位，但`bsr_badge`和`amazon_choice_badge`均输出`fail`，原因写明“ASIN不合法”；页面身份门禁失败时七项统一为`unknown`并显示`-`。
 - 父子ASIN发散：只读取`#inline-twister-expander-content-*`变体区域下面的`li.inline-twister-swatch[data-asin]`，从这些子体节点提取ASIN并排除当前请求ASIN。至少还有一个不同ASIN为`pass`；变体区域存在但没有不同ASIN为`fail`；变体区域无法确认时为`unknown`。`#twisterPlusPriceSubtotalWWDesktop_feature_div`只属于价格汇总，不再作为父子ASIN证据。
 - 环保标：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`必须存在非空的`data-csa-c-asin`且其值必须与当前页面ASIN一致；缺失或不一致均不得通过。该模块后代还必须同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
 
-所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将可见列改为N商品主图、O品牌故事、P前端尺寸、Q BSR、R父ASIN发散、S环保标、T AC标，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点；BSR和AC均采用当前商品作用域内的独立存在性规则，AC补充开放Shadow DOM可见徽章证据回传，规则版本升级为`2026-09-10-v13`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
+所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮保留N商品主图、O品牌故事、P前端尺寸、Q BSR、R父ASIN发散、S环保标、T AC标的列位，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点；BSR和AC先分别执行当前商品作用域提取，再执行同一ASIN互斥门禁：二者同时存在时Q/T均为`fail`并保留冲突证据，AC继续支持开放Shadow DOM可见徽章证据回传，规则版本升级为`2026-09-10-v14`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
 
 ### 6.2 后台Feedback来源和筛选
 
@@ -363,7 +363,7 @@ ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式�
 
 ## 13. 日志、恢复证据与通知
 
-当前parser_rule_version为2026-08-26-v4，单表缓存schema=6、weekly bundle schema=3。bundle记录源指纹、规则版本、容差、前端检查规则版本、来源时段和created_at；恢复必须匹配当前版本/容差/源指纹，且时间不在未来、不超过cache_max_age_hours（默认12小时）。同时验证每条有效商品的采集timestamp，不能通过重存文件给旧价格续期。旧schema、缺少元数据和过期结果拒绝发布，要求重新抓取；兼容恢复的schema=2记录缺少前端证据时只能恢复为`unknown`，不能解释成当前规则下的通过。不会删除旧证据。版本同时维护config.json、config.example.json及app/config.py默认值。
+当前parser_rule_version为2026-08-26-v4，单表缓存schema=7、weekly bundle schema=3。bundle记录源指纹、规则版本、容差、前端检查规则版本、来源时段和created_at；恢复必须匹配当前版本/容差/源指纹，且时间不在未来、不超过cache_max_age_hours（默认12小时）。同时验证每条有效商品的采集timestamp，不能通过重存文件给旧价格续期。旧schema、缺少元数据和过期结果拒绝发布，要求重新抓取；兼容恢复的schema=2记录缺少前端证据时只能恢复为`unknown`，不能解释成当前规则下的通过。不会删除旧证据。版本同时维护config.json、config.example.json及app/config.py默认值。
 
 缓存/manifest/bundle等采用唯一临时文件、flush/fsync后原子替换；线程内替换串行化，单表增量快照的创建与写盘也串行化，避免较旧快照后写覆盖。Tab获取或增量缓存失败逐行/逐次记录，不无声终止工作线程；最终缓存失败保留采集结果交给weekly bundle持久化，bundle落盘失败则不继续发布。
 
@@ -525,13 +525,13 @@ $env:PYTHONPATH='app'
 
 当前Windows任务由`bin/schedule.ps1`创建四条价格槽位任务：周一07:30 `AmazonDaily_0730`、周二至周五07:30 `AmazonDaily_0730_weekday`、周一15:30 `AmazonDaily_1530`、周二至周五15:30 `AmazonDaily_1530_weekday`。Feedback逻辑任务复用周一至周五07:30的两个价格槽位，在同一进程和统一锁内只执行一次；不得额外安装与之并发写`Feedback差评汇总`的独立任务。四条任务均为WeeksInterval=1、EndBoundary为空。任务直接以`wscript.exe //B //NoLogo bin/hidden_ps1.vbs bin/scheduled_run.ps1 <scheduled_slot>`启动隐藏PowerShell，再执行`app/main.py --weekly-run --confirm --scheduled-slot <scheduled_slot>`，07:30槽位额外执行`feedback_0730`阶段，不经过可见的bat/cmd窗口。旧版本若仍显示`Execute=cmd.exe`或`scheduled_run.bat`，必须重新运行安装脚本替换任务定义。
 
-当前账号为Interactive：需电脑开机且账号已登录；不需GPT窗口。任务Hidden=true、Execute=wscript.exe、WScript批处理模式与PowerShell WindowStyle=Hidden共同保证不创建可见终端；用户不能因关闭控制台误停。StartWhenAvailable=true，开机或恢复后补触发错过时段，入口必须把原定`scheduled_slot`继续传给Python，不能按实际补跑时间重新判断来源；整批锁与IgnoreNew共同防重叠。日志使用UTF-8保存开始/结束、退出码和`scheduled_slot`。安装脚本bin/schedule.ps1创建这两条工作日任务；不操作HTML服务或防火墙。不要另装重复调度器。
+当前账号为Interactive：需电脑开机且账号已登录；不需GPT窗口。任务Hidden=true、Execute=wscript.exe、WScript批处理模式与PowerShell WindowStyle=Hidden共同保证不创建可见终端；用户不能因关闭控制台误停。StartWhenAvailable=true，开机或恢复后补触发错过时段，入口必须把原定`scheduled_slot`继续传给Python，不能按实际补跑时间重新判断来源；整批锁与IgnoreNew共同防重叠。日志使用UTF-8保存开始/结束、退出码和`scheduled_slot`。安装脚本bin/schedule.ps1创建上述四条时段任务；若安装前两个15:30任务处于禁用状态，重装必须保持下午整组禁用，不得因修复早间任务静默恢复下午执行。不操作HTML服务或防火墙，不另装重复调度器。
 
 调度时段与来源周期必须按第16.1节解释：周一07:30只运行上一周期的`monday_carryover`，周一15:30执行`monday_switch`并要求登记表已有更高的最新有效序号，周二至周五07:30/15:30运行`weekday_steady`并复用周一15:30固化的本周manifest。`StartWhenAvailable`导致周一07:30延迟补跑时仍保持该时段的上周来源规则；如果错过周一15:30，不能将补跑伪装成周一早间，必须记录实际`selection_mode`并在没有最新周报时停止。
 
 周一15:30切换失败不得自动回退使用上一周结果冒充本周；应保留上一周固定结果不变，记录失败原因并只通知周成业。周二至周五发现登记表有新周期时不得无感切换，除非进入周一15:30切换窗口或明确执行人工换周维护。
 
-单次历史07:00任务不是长期规则；本次文档审查不删除或修改其他Windows任务。
+单次历史07:00任务不是长期规则；确认其无未来触发时间后可以禁用，但不得把它当作当前07:30正式任务或重新启用。
 
 ### 19.3 验收顺序
 

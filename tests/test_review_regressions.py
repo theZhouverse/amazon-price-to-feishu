@@ -11,6 +11,7 @@ import main
 from amazon.crawler import AmazonBrowser
 from amazon.parser import parse_main_price, select_main_price
 from cache import SCHEMA_VERSION, validate_recovery_metadata
+from frontend_checks import FRONTEND_CHECK_RULE_VERSION
 from models import ReportRow, PageStatus, CrawlResult
 from product_links import MARKETPLACES
 import test_price_refresh as refresh_fixture
@@ -210,6 +211,34 @@ class RecoveryTests(unittest.TestCase):
                     main.atomic_json(path, {**bundle, **change})
                     with self.assertRaises(RuntimeError):
                         main._load_weekly_push_results('run1', ['PD03'], manifest, cfg)
+
+    def test_schema3_bundle_with_stale_frontend_rules_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            meta = {'period_id': 'seq-3', 'snapshot_spreadsheet_token': 'snapshot',
+                    'result_spreadsheet_token': 'result'}
+            manifest = {'period_id': 'seq-3',
+                        'snapshot': {'spreadsheet_token': 'snapshot'},
+                        'result': {'spreadsheet_token': 'result'}}
+            cfg = {'html_archive_enabled': False, 'parser_rule_version': 'current',
+                   'price_tolerance': '0.50', 'cache_max_age_hours': 12}
+            main.atomic_json(root / 'snapshots/run1/source.json', {'source_meta': meta})
+            bundle = {**meta, 'schema_version': 3, 'run_id': 'run1',
+                      'created_at': datetime.now().isoformat(),
+                      'parser_rule_version': 'current', 'price_tolerance': '0.50',
+                      'frontend_check_rule_version': '2026-09-10-v13',
+                      'sheets': {'PD03': [result('B000000001').as_dict()]}}
+            path = root / 'daily_runs/test/run1_weekly_bundle.json'
+            with patch.object(main, 'OUTPUT_DIR', root):
+                main.atomic_json(path, bundle)
+                with self.assertRaisesRegex(RuntimeError, '前端检查规则版本'):
+                    main._load_weekly_push_results('run1', ['PD03'], manifest, cfg)
+
+                bundle['frontend_check_rule_version'] = FRONTEND_CHECK_RULE_VERSION
+                main.atomic_json(path, bundle)
+                self.assertEqual(
+                    len(main._load_weekly_push_results('run1', ['PD03'], manifest, cfg)['PD03']),
+                    1)
 
 if __name__ == '__main__':
     unittest.main()

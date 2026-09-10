@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 import json
@@ -237,7 +236,8 @@ class WeeklyExecutionTest(unittest.TestCase):
                    'html_archive_required': True, 'html_server_enabled': True,
                    'feishu_manager_open_id': 'ou_manager'}
             args = SimpleNamespace(sheets='', asins='', limit=0, dry_run=False, fetch_only=False,
-                no_headless=False, force_fetch=True, force_push=False, run_id='run1')
+                no_headless=False, force_fetch=True, force_push=False, run_id='run1',
+                scheduled_slot='manual')
             def fetch(run_id, sheet, rows, run_cfg, **kw):
                 self.assertFalse(run_cfg['html_archive_enabled'])
                 self.assertFalse(run_cfg['html_archive_required'])
@@ -261,6 +261,11 @@ class WeeklyExecutionTest(unittest.TestCase):
             report = json.loads(next(output.glob('daily_runs/*/run1_delivery.json')).read_text(encoding='utf-8'))
             self.assertEqual(report['written_rows'], 1)
             self.assertEqual(report['failures'][0]['stage'], 'rename')
+            saved_manifest = store.load('seq-2')
+            self.assertEqual(saved_manifest['source_period_id'], 'seq-2')
+            self.assertEqual(saved_manifest['scheduled_slot'], 'manual')
+            self.assertEqual(saved_manifest['selection_mode'], 'manual')
+            self.assertEqual(saved_manifest['feedback_status'], 'skipped_schedule')
             self.assertTrue(cfg['html_archive_enabled'])  # no mutation of optional HTML settings
 
 

@@ -1,5 +1,25 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 明早生产运行前完整检查与调度修复（最新）
+
+- [x] 发现实际Windows入口仍只有两个“周一至周五”任务，且`hidden_ps1.vbs`不转发附加参数、`scheduled_run.ps1`未传`--scheduled-slot`；历史07:30任务因此以`manual`模式运行，2026-09-10 07:30 summary中的`source_period_id/scheduled_slot/selection_mode`为空，Feedback也会因非07:30逻辑槽位被跳过。
+- [x] 修复完整参数链：四条任务分别传入`monday_0730`、`weekday_0730`、`monday_1530`、`weekday_1530`；VBS逐项转发参数，PowerShell把槽位写入START日志并传给`app/main.py`。`StartWhenAvailable`延迟补跑不再依赖实际启动时钟判断来源。
+- [x] 重新安装并只读回查四条任务：`AmazonDaily_0730`仅周一、`AmazonDaily_0730_weekday`仅周二至周五；两者`Enabled=True`、`Hidden=True`、`Execute=wscript.exe`。明早2026-09-11 07:30由weekday任务运行。两条15:30任务继续保持`Enabled=False`，没有恢复下午执行。
+- [x] 已过期的`AmazonDaily_20260826_0700`一次性任务无未来触发时间，但仍走可见BAT；已将其禁用，未删除历史任务记录。
+- [x] 调度日志统一设置PowerShell控制台输出和Python为UTF-8，避免旧scheduler log中的中文乱码；manifest新增顶层`source_period_id`并同步最终Feedback统计，恢复和通知可直接审计同一来源/时段/Feedback状态。
+- [x] 飞书登记表只读预检通过：扫描199行、有效链接4条、当前唯一序号4、当前登记行5；未执行飞书写入。配置JSON与example顶层键完全一致，Feedback已启用、两个店铺配置及状态账本完整，HTML归档和HTML服务保持关闭。
+- [x] 正式同入口单条实时只读预跑`20260911_001435`通过：`PD03/B0C5R56QTF`、`period=seq-4`、`source_period_id=seq-4`、`scheduled_slot=weekday_1530`、`selection_mode=weekday_steady`、`status=ok`、`USD`、邮编验证通过，BSR=`pass`、AC=`fail`、前端规则v14；耗时51.547秒，未写飞书、未发送通知。
+- [x] 加拿大站同入口单条实时只读预跑`20260911_002057`通过：`CPD03/B0BNDLKP54`落地`https://www.amazon.ca/dp/B0BNDLKP54?th=1`，`status=ok`、`marketplace=CA`、`CAD`、加拿大位置验证通过，BSR=`pass`、AC=`fail`、前端规则v14；耗时46.157秒，未写飞书、未发送通知。该样本证明CA主链可用，不代表其它重定向ASIN已修复。
+- [x] 最终验证：338项unittest全部通过；Python `compileall`、三份PowerShell脚本语法、两份JSON配置解析、`git diff --check`均通过；真实VBS参数转发探针退出码0并已删除临时探针文件。
+- [ ] 2026-09-11 07:30真实全量仍是最终在线验收：需核对scheduler START/END与UTF-8、`weekday_0730/weekday_steady/seq-4`、18表写入/阻断、CA身份异常、Feedback增量3日/10日留存、固定表回读和全员通知。计划任务存在与单条预跑不能替代该结果。
+
+## 2026-09-10 BSR/AC规则按开发SPEC重新对齐（最新）
+
+- [x] 对照 `D:\projects\amazon_daily_dev_20260821\docs\SPEC.md` 第5节和第6.1节，确认BSR与Amazon's Choice均需先绑定当前请求ASIN；BSR只读取当前商品详情表中的精确 `Best Sellers Rank` 字段，AC只读取当前商品作用域内的可见实际徽章。
+- [x] 恢复同一当前ASIN同时出现BSR和AC时的业务唯一性门禁：两项保留各自 `observed`、定位和原始证据，但 `bsr_badge` 与 `amazon_choice_badge` 均输出 `fail`，原因明确写入“ASIN不合法”；推荐卡、隐藏说明、其他ASIN和无法绑定的证据仍不计入。
+- [x] 保留现代页面 AC 的可见 Shadow DOM 递归采集及多节点文本拼接能力，避免规则对齐回退为“只读 outerHTML”；规则版本升级为 `2026-09-10-v14`，旧版 v13 bundle 不在新规则下重新解释。
+- [x] 更新生产 `SPEC`、`README`、`REVIEWS` 与本节记录，补充同ASIN双标志冲突的离线回归；未读取或写入飞书表格，未改变结果表列顺序。
+
 ## 2026-09-10 全量重跑、Feedback店铺字段与结果表顺序收口（最新）
 
 - [x] 以隐藏窗口执行一次完整生产批次：`app/main.py --weekly-run --confirm --scheduled-slot weekday_0730`，run_id `20260910_160228`，来源周期 `seq-4`、模式 `weekday_steady`；18 个业务子表（US 11、CA 7）全部完成实时抓取，抓取阶段耗时 `4847.703s`（约80.80分钟）。
@@ -13,8 +33,8 @@
 
 - [x] 根据用户提供的页面样式线索复核 AC 徽章结构；样式文本本身不作为业务证据。针对 Amazon 现代页面将可见 AC 徽章可能位于开放 Shadow DOM、或由 `.mvt-ac-badge-*` / `.ac-badge-*` 多个节点拼接的情况，浏览器快照同一轮递归采集可见徽章文本，并强制校验 `#acBadge_feature_div` 的当前 ASIN 绑定。
 - [x] AC 证据仍排除 `a-popover-preload`、`aria-hidden`、不可见节点、推荐/赞助/其他 ASIN 区域；无法同时证明可见、文本精确为 `Amazon's Choice` 且属于请求 ASIN 时保持 `❌` 或页面门禁下的 `-`，不把 CSS 样式或隐藏解释文案当作存在。
-- [x] 新增离线回归：现代徽章文本拆分、Shadow DOM 证据绑定及错误 ASIN 拒绝；前端规则版本升级为 `2026-09-10-v13`。
-- [x] 完整回归：`337` 项 unittest 全部通过，`compileall` 与 `git diff --check` 通过。
+- [x] 新增离线回归：现代徽章文本拆分、Shadow DOM 证据绑定及错误 ASIN 拒绝；前端规则版本已由 v13 升级为当前 `2026-09-10-v14`，新增同ASIN双标志冲突回归。
+- [x] 完整回归：`338` 项 unittest 全部通过，`compileall` 与 `git diff --check` 通过；其中新增旧前端规则缓存/weekly bundle 拒绝回归。
 - [x] 按用户要求仅禁用 Windows 计划任务 `\\AmazonDaily_1530`；读回 `Enabled=false`。`AmazonDaily_0730` 未修改。此为运行态临时暂停，调度脚本中的工作日15:30定义保留，恢复前不得误报下午任务已执行。
 - [x] 本轮不读取或写入生产固定结果表；AC代码、测试和文档变更仍在当前修复分支，待恢复15:30前再做一次隔离样本验收。
 
@@ -62,7 +82,7 @@
 
 - [x] 发现并确认`D:\projects\amazon_daily`是指向生产根目录`D:\projects\amazon_daily_structured_20260821`的Windows Junction，不是独立副本；以后禁止在该路径开发。
 - [x] 创建独立开发副本`D:\projects\amazon_daily_dev_20260821`，基于当前Git工作区复制代码和文档，排除生产`.env`、`outputs`、`htmls`、`data`、`tmp`、`.venv`、`.workbuddy`和`.codex`；开发副本未安装Windows计划任务。
-- [x] 开发副本为调度入口增加稳定的`scheduled_slot`参数/环境变量，不能用实际启动时间推断周一07:30与周一15:30；离线覆盖StartWhenAvailable延迟补跑和人工启动场景；四条Windows任务尚未重新安装实测。
+- [x] 开发副本为调度入口增加稳定的`scheduled_slot`参数/环境变量，不能用实际启动时间推断周一07:30与周一15:30；离线覆盖StartWhenAvailable延迟补跑和人工启动场景；四条Windows任务已于2026-09-11在生产根目录重新安装并按本文件顶部记录回读。
 - [ ] 增加发布前真实路径校验：解析开发路径、生产路径和Junction/符号链接，路径相同或解析后相同必须拒绝；发布白名单不得包含`.env`、`outputs`、`htmls`、`data`、`.venv`。
 - [ ] 增加生产发布脚本和回滚证据：取得运行锁、确认没有价格进程、备份到`outputs/code_backups/{release_id}`、复制并校验代码文件、保留生产运行产物，发布失败自动停止而不是覆盖运行状态。
 - [ ] 开发副本先完成离线回归和只读飞书检查；通过后再人工批准发布到生产目录。开发副本不得执行正式`--weekly-run --confirm`、不得安装/修改`AmazonDaily_0730/1530`。
@@ -75,11 +95,11 @@
 - [x] 明确业务规则：周一07:30使用上一周已经固化的`period_id`/manifest/完整快照；周一15:30重新读取登记表并切换到更高的最新有效序号；周二至周五07:30/15:30沿用周一15:30确认的本周周期。
 - [x] 更新`docs/SPEC.md`第1、1.1、16、16.1、18.1、19.2、19.3节，补充来源选择、快照创建/复用、失败回退和通知字段规则。
 - [x] 开发副本增加时段感知的来源选择器，输出`source_period_id`、`selection_mode`（`monday_carryover`/`monday_switch`/`weekday_steady`）和登记行号；周一07:30禁止选择最新本周链接；真实云端双时段仍待验收。
-- [x] 开发副本调度器向Python传入稳定的`scheduled_slot`（`monday_0730`/`monday_1530`/工作日槽位），补跑保持原计划槽位；人工运行标记`manual`；Windows任务重装实测仍待完成。
+- [x] 调度器向Python传入稳定的`scheduled_slot`（`monday_0730`/`monday_1530`/工作日槽位），补跑保持原计划槽位；人工运行标记`manual`；Windows四任务已于2026-09-11重装并回读参数。
 - [ ] 周一07:30实现上一周期manifest/快照存在性、结构和权限校验；缺失或不可读时安全停止，不读取可变原表，不回退到任意旧周期。
 - [ ] 周一15:30要求登记表出现比上一周期更高的有效序号并完成源Token、完整副本、结构校验和manifest固化；无新序号、复制504/超时、权限或结构失败时保留上一周固定结果并通知周成业。
 - [ ] 周二至周五保持本周周期不变；发现新的更高序号或同序号换URL时只登记`pending_period_change`并告警，不在非换周时点静默切换。
-- [ ] 更新运行通知、weekly bundle、summary、manifest和日志，明确记录执行时段、`source_period_id`、`selection_mode`、源快照Token（脱敏）及选择原因；周一早间通知明确“沿用上一周周报”，周一下午明确“已切换最新周报”。
+- [x] 更新运行通知、weekly bundle、summary、manifest和日志，明确记录执行时段、`source_period_id`、`selection_mode`、源快照Token（脱敏）及选择原因；2026-09-11补齐manifest顶层来源字段和Feedback最终状态，真实周一早晚通知文案仍纳入下方跨周在线验收。
 - [ ] 增加离线回归：登记表已有新旧两行时周一07:30选旧、周一15:30选新；无新行时下午安全停止；周二发现新行不自动切换；同序号换URL拒绝；断点恢复不改变已固化来源。
 - [ ] 完成真实验收：至少覆盖一个周一早间和同日周一下午批次、随后一个工作日早晚批次，分别记录run_id、source_period_id、selection_mode、固定表写入行数、阻断行数和完整耗时；通过后再将本节实现项勾选完成。
 
@@ -114,7 +134,7 @@
 - [x] 在开发副本完成商品结果表N:T七个固定前端列、U/V时间戳和Amazon链接的本地布局模型；前端列显示`✅`/`❌`/`-`，bundle保留原始状态。旧A:P/A:O迁移、写前备份、写后整行回读和尾行清理属于后端/发布分支，不在本分支执行真实云端写入。
 - [x] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
 - [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
-- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`；同一ASIN同时出现时保持两项独立（本条早期v11互斥描述已由最新v12规则替代）。
+- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice不读取周报预期或上一批值。BSR与AC先分别按当前商品容器输出原始状态；同一ASIN同时出现时按当前 v14 互斥门禁将两项发布为`fail`并保留冲突证据。
 - [ ] F1：为两个店铺分别登记Seller Central【反馈管理器】URL、非敏感店铺标识、凭证引用和目标上下文；只允许从【最新反馈】区域读取，禁止接入商品Review、Q&A或前台评论。两个店铺必须使用独立会话并串行处理，不得混用页面、分页游标、订单详情或下载状态。
 - [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
 - [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。
@@ -142,7 +162,7 @@
 - [x] 2026-09-08 开发副本实测当前登记序号4：只读发现新快照19个子表、18个业务映射（US=11、CA=7），排除`BI源数据`；ASIN/商品链接审计有效720、无效0、辅助标签跳过294。随后创建独立快照副本（Token仅在日志中脱敏保存），原周报未写入。
 - [x] 前端单条实测：US `B0C5R56QTF` 使用新快照完成`amazon.com`/USD/90210/ASIN一致性门禁，尺寸`2.5x8`与页面`2.5' x 8'`匹配；首次样本暴露导航/语言误报后，收紧全局容器、尺寸结构和单位比较并升级前端规则`2026-09-08-v2`。CA首条`B0D9NT9JQN`保留真实`identity_mismatch`，N:T显示`-`且bundle为`unknown`，未绕过重试、未写飞书。
 - [x] 修正`--limit`按有效/无效源行合并后的原表行号截取，避免`source_data_invalid`记录使前端样本超出限制；以上真实样本均为dry-run，仅保存本地bundle/CSV/缓存证据。
-- [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列按v12独立判定；尺寸规则补充`8'X10'`与`8 x 10 ft`的共享单位等价比较并忽略`Rectangular`后缀，早期规则版本为`2026-09-10-v11`。
+- [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时当前 v14 两列均判定`fail`并记录冲突；尺寸规则补充`8'X10'`与`8 x 10 ft`的共享单位等价比较并忽略`Rectangular`后缀，早期规则版本为`2026-09-10-v11`。
 - [x] 2026-09-10 尺寸判定修复：发现旧 bundle 的 `expected` 仍是未求值的`BI源数据`公式文本，且旧规则无法把`2.5'X8'`与页面`2'6\" x 8'`识别为同一尺寸；新增公式源值解析、共享尾部单位等价和英尺小数/英尺加英寸换算。18个隔离业务子表只重算P列并逐表回读：719个商品行中`✅` 481、`❌` 0、`-` 238；没有改价格、SKU、尺寸C列或其他风控列。规则版本为`2026-09-10-v11`。
 - [x] 用历史离线HTML完成各站点/布局的选择器覆盖清单和前端反例回归；离线样本只用于规则验证，不能替代当次实时页面结果。紫鸟/ZClaw实时US/CA采集由后端/发布分支负责，不作为本分支前端完成条件。
 - [x] 依据业务反馈调整可见列：前端七列改为`✅`/`❌`/`-`，详细`pass/fail/unknown/not_applicable`仅保留在bundle；时间戳和Amazon链接移动到U/V最后两列，并同步旧A:P/A:O迁移逻辑。

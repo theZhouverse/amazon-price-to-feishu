@@ -8,10 +8,19 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $runner = Join-Path $projectRoot 'bin\scheduled_run.ps1'
 $hiddenLauncher = Join-Path $projectRoot 'bin\hidden_ps1.vbs'
+$taskNames = @(
+    'AmazonDaily_0730',
+    'AmazonDaily_0730_weekday',
+    'AmazonDaily_1530',
+    'AmazonDaily_1530_weekday'
+)
 
 if ($Action -eq '--remove') {
-    & schtasks.exe /Delete /TN AmazonDaily_0730 /F
-    & schtasks.exe /Delete /TN AmazonDaily_1530 /F
+    foreach ($taskName in $taskNames) {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        }
+    }
     exit 0
 }
 
@@ -21,12 +30,27 @@ if ($Action -eq '--remove') {
 # Use the GUI-subsystem WScript launcher.  A task that calls a .bat/cmd wrapper
 # can still flash a console before the inner PowerShell -WindowStyle Hidden is
 # applied; wscript.exe avoids creating that console in the first place.
-$taskAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument (
-    '//B //NoLogo "{0}" "{1}"' -f $hiddenLauncher, $runner)
 $settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-foreach ($item in @(@('AmazonDaily_0730', 7, 30), @('AmazonDaily_1530', 15, 30))) {
-    $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At (
-        Get-Date -Hour $item[1] -Minute $item[2] -Second 0)
-    Register-ScheduledTask -TaskName $item[0] -Action $taskAction -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+$afternoonWasDisabled = $false
+$existingAfternoon = Get-ScheduledTask -TaskName 'AmazonDaily_1530' -ErrorAction SilentlyContinue
+if ($existingAfternoon -and -not $existingAfternoon.Settings.Enabled) {
+    $afternoonWasDisabled = $true
+}
+$definitions = @(
+    [pscustomobject]@{ Name = 'AmazonDaily_0730'; Days = @('Monday'); Hour = 7; Minute = 30; Slot = 'monday_0730' },
+    [pscustomobject]@{ Name = 'AmazonDaily_0730_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday'); Hour = 7; Minute = 30; Slot = 'weekday_0730' },
+    [pscustomobject]@{ Name = 'AmazonDaily_1530'; Days = @('Monday'); Hour = 15; Minute = 30; Slot = 'monday_1530' },
+    [pscustomobject]@{ Name = 'AmazonDaily_1530_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday'); Hour = 15; Minute = 30; Slot = 'weekday_1530' }
+)
+foreach ($item in $definitions) {
+    $taskAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument (
+        '//B //NoLogo "{0}" "{1}" "{2}"' -f $hiddenLauncher, $runner, $item.Slot)
+    $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $item.Days -At (
+        Get-Date -Hour $item.Hour -Minute $item.Minute -Second 0)
+    Register-ScheduledTask -TaskName $item.Name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+}
+if ($afternoonWasDisabled) {
+    Disable-ScheduledTask -TaskName 'AmazonDaily_1530' | Out-Null
+    Disable-ScheduledTask -TaskName 'AmazonDaily_1530_weekday' | Out-Null
 }
