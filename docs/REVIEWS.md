@@ -53,7 +53,7 @@
 - 原始页面状态：`ok=483`、`identity_mismatch=166`、`crawl_error=36`、`source_data_invalid=29`、`parse_error=5`；七项前端状态累计`pass=1879`、`fail=1499`、`unknown/not_applicable=1655`。`identity_mismatch`、`crawl_error`、`parse_error`和`source_data_invalid`均保留为页面/源数据状态，不被伪装成普通字段`fail`。
 - 全量隔离表：[TEST_前端真实页面验证_20260910_083515](https://wit0jhu6kvu.feishu.cn/sheets/GA6PsnlcjhTGsqtBocdcVct7n2e)。表内为默认空白页、`TEST_SUMMARY`和18个业务子表；`TEST_SUMMARY`为18行×14列，PD03为111条数据行×22列A:V，云端回读通过。生产固定结果表、Feedback表和紫鸟/ZClaw后端均未写入。
 - 本地证据：`outputs/daily_runs/2026-09-10/20260910_083515_weekly_bundle.json`、`outputs/daily_runs/2026-09-10/20260910_083515_weekly_summary.json`、`outputs/frontend_online_tests/20260910_083515/{manifest.json,all_original_report.json,original_runs/20260910_083515.log}`。由于全量仍有技术异常和身份错配，本结果是实时规则/链路验收证据，不是生产合并通过证据。
-- 尺寸规则修正回读：发现该 bundle 的尺寸 `expected` 仍是未求值的`BI源数据`公式文本；同时补齐`8'X10'`与`8 x 10 ft`的共享单位、`2.5'X8'`与`2'6\" x 8'`的英尺换算。依据同一批真实页面已保存的 `observed` 尺寸，仅重算隔离表18个业务子表P列并逐表回读，719个商品行最终为`✅=481`、`❌=0`、`-=238`；未修改价格、SKU、C列尺寸或其他风控列。该回写是尺寸规则的定向修复验证，不替代后续按 v11 重新抓取的完整实时验收。
+- 尺寸规则修正回读：发现该 bundle 的尺寸 `expected` 仍是未求值的`BI源数据`公式文本；同时补齐`8'X10'`与`8 x 10 ft`的共享单位、`2.5'X8'`与`2'6\" x 8'`的英尺换算。依据同一批真实页面已保存的 `observed` 尺寸，仅重算隔离表18个业务子表P列并逐表回读，719个商品行最终为`✅=481`、`❌=0`、`-=238`；并同步回写`TEST_SUMMARY!G3:I20`，七项总计更新为`pass=2261`、`fail=1117`、`unknown=1655`。未修改价格、SKU、C列尺寸或其他风控列。该回写是尺寸规则的定向修复验证，不替代后续按 v11 重新抓取的完整实时验收。
 
 ## 2026-09-09 Feedback固定结果子表注册与表头回读（最新）
 
