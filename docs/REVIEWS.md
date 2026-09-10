@@ -2,7 +2,7 @@
 
 ## 2026-09-10 生产全量运行与 Feedback 固定子表回读（最新）
 
-- 本地工作区已与 GitHub `origin/fix-codescan-20260826` 同步到最新提交 `c67f704`（运行时合并基线 `ffcd6ea`）；本次仅将生产配置 `feedback.enabled` 从 `false` 改为 `true`，未复制或打印任何 Secret。
+- 本地工作区已与 GitHub `origin/fix-codescan-20260826` 保持同分支同步（运行时合并基线 `ffcd6ea`）；本次仅将生产配置 `feedback.enabled` 从 `false` 改为 `true`，未复制或打印任何 Secret。
 - 使用隐藏窗口运行原入口 `app/main.py --weekly-run --confirm --scheduled-slot weekday_0730`，运行编号 `20260910_121408`，来源周期 `seq-4`，选择模式 `weekday_steady`。HTML 归档与局域网服务保持关闭，既有 `htmls` 历史文件未删除，也没有产生新 HTML 下载。
 - 18 个价格业务子表（US 11、CA 7）均完成实时抓取；页面状态为 `ok=489`、`identity_mismatch=196`、`source_data_invalid=29`、`parse_error=5`，前端七项累计 `pass=2285`、`fail=1136`、`unknown=1612`。固定结果 Spreadsheet 仍为 `Epads8MQkhkuBctjl3lcqLUvnCg`，基础 A:G 同步 719 行，H:V 实际写入 489 行，230 行因身份/源数据/解析门禁阻断；批次状态为 `partial`，未将阻断行伪装成成功。
 - CA 子表已实际执行并写入：币种统计 `USD=549`、`CAD=170`；`CPD03` 等代表表回读均为 A:V 22 列。CA 仍存在较高 `identity_mismatch`，后续应依据本批 bundle 的请求 ASIN/最终 ASIN 证据优化站点导航，不能只看写入总数判断 CA 已完全修复。
