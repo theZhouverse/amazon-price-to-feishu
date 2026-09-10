@@ -12,6 +12,8 @@ $hiddenLauncher = Join-Path $projectRoot 'bin\hidden_ps1.vbs'
 if ($Action -eq '--remove') {
     & schtasks.exe /Delete /TN AmazonDaily_0730 /F
     & schtasks.exe /Delete /TN AmazonDaily_1530 /F
+    & schtasks.exe /Delete /TN AmazonDaily_0730_weekday /F
+    & schtasks.exe /Delete /TN AmazonDaily_1530_weekday /F
     exit 0
 }
 
@@ -21,12 +23,18 @@ if ($Action -eq '--remove') {
 # Use the GUI-subsystem WScript launcher.  A task that calls a .bat/cmd wrapper
 # can still flash a console before the inner PowerShell -WindowStyle Hidden is
 # applied; wscript.exe avoids creating that console in the first place.
-$taskAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument (
-    '//B //NoLogo "{0}" "{1}"' -f $hiddenLauncher, $runner)
 $settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-foreach ($item in @(@('AmazonDaily_0730', 7, 30), @('AmazonDaily_1530', 15, 30))) {
-    $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At (
-        Get-Date -Hour $item[1] -Minute $item[2] -Second 0)
-    Register-ScheduledTask -TaskName $item[0] -Action $taskAction -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+foreach ($item in @(
+    @{Name = 'AmazonDaily_0730'; Hour = 7; Minute = 30; Days = @('Monday'); Slot = 'monday_0730'},
+    @{Name = 'AmazonDaily_0730_weekday'; Hour = 7; Minute = 30; Days = @('Tuesday','Wednesday','Thursday','Friday'); Slot = 'weekday_0730'},
+    @{Name = 'AmazonDaily_1530'; Hour = 15; Minute = 30; Days = @('Monday'); Slot = 'monday_1530'},
+    @{Name = 'AmazonDaily_1530_weekday'; Hour = 15; Minute = 30; Days = @('Tuesday','Wednesday','Thursday','Friday'); Slot = 'weekday_1530'}
+)) {
+    $slot = $item.Slot
+    $taskAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument (
+        '//B //NoLogo "{0}" "{1}" "{2}"' -f $hiddenLauncher, $runner, $slot)
+    $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $item.Days -At (
+        Get-Date -Hour $item.Hour -Minute $item.Minute -Second 0)
+    Register-ScheduledTask -TaskName $item.Name -Action $taskAction -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 }

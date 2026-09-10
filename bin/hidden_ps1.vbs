@@ -20,5 +20,9 @@ End If
 shell.CurrentDirectory = fso.GetParentFolderName(fso.GetParentFolderName(scriptPath))
 commandLine = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " _
               & quote & scriptPath & quote
+Dim i
+For i = 1 To WScript.Arguments.Count - 1
+    commandLine = commandLine & " " & quote & WScript.Arguments(i) & quote
+Next
 exitCode = shell.Run(commandLine, 0, True)
 WScript.Quit exitCode
