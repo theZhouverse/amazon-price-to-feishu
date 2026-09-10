@@ -1,6 +1,15 @@
 # TASKS: Amazon Daily
 
-## 2026-09-10 测试表字段、Feedback顺序与前端标志规则更新（最新）
+## 2026-09-10 AC标识证据增强与15:30任务临时暂停（最新）
+
+- [x] 根据用户提供的页面样式线索复核 AC 徽章结构；样式文本本身不作为业务证据。针对 Amazon 现代页面将可见 AC 徽章可能位于开放 Shadow DOM、或由 `.mvt-ac-badge-*` / `.ac-badge-*` 多个节点拼接的情况，浏览器快照同一轮递归采集可见徽章文本，并强制校验 `#acBadge_feature_div` 的当前 ASIN 绑定。
+- [x] AC 证据仍排除 `a-popover-preload`、`aria-hidden`、不可见节点、推荐/赞助/其他 ASIN 区域；无法同时证明可见、文本精确为 `Amazon's Choice` 且属于请求 ASIN 时保持 `❌` 或页面门禁下的 `-`，不把 CSS 样式或隐藏解释文案当作存在。
+- [x] 新增离线回归：现代徽章文本拆分、Shadow DOM 证据绑定及错误 ASIN 拒绝；前端规则版本升级为 `2026-09-10-v13`。
+- [x] 完整回归：`337` 项 unittest 全部通过，`compileall` 与 `git diff --check` 通过。
+- [x] 按用户要求仅禁用 Windows 计划任务 `\\AmazonDaily_1530`；读回 `Enabled=false`。`AmazonDaily_0730` 未修改。此为运行态临时暂停，调度脚本中的工作日15:30定义保留，恢复前不得误报下午任务已执行。
+- [x] 本轮不读取或写入生产固定结果表；AC代码、测试和文档变更仍在当前修复分支，待恢复15:30前再做一次隔离样本验收。
+
+## 2026-09-10 测试表字段、Feedback顺序与前端标志规则更新（此前记录）
 
 - [x] 仅在用户指定的隔离测试表 [GA6PsnlcjhTGsqtBocdcVct7n2e](https://wit0jhu6kvu.feishu.cn/sheets/GA6PsnlcjhTGsqtBocdcVct7n2e?sheet=JMa2c) 执行云端结构调整；固定生产结果表 `Epads8MQkhkuBctjl3lcqLUvnCg` 未读取写入、未改名、未删除子表。
 - [x] 测试表18个业务子表（PD/XD/CPD/PDF）逐表读取 `A2:V2` 并确认22列表头已完全匹配当前 `RESULT_HEADERS`：L=`价格一致性`、N=`商品主图`、O=`品牌故事`、P=`前端尺寸`、Q=`BSR`、R=`父ASIN发散`、S=`环保标`、T=`AC标`；不存在HTML列。
@@ -9,7 +18,7 @@
 - [x] 测试表新增固定9列表头的 `Feedback差评汇总`（Sheet ID `49WYs8`），位置读回为最后一个子表（index 18）；本次没有伪造反馈业务行，等待后续正式Feedback任务写入。
 - [x] 代码将 `store_a`/`store_b` 保留为内部采集键，Feedback可见“店铺”列改由配置显示名输出：`冬豚`、`北蓉`；幂等键仍稳定，重复运行不会因显示名转换产生重复行。
 - [x] 发布器兼容旧结果：若历史9列表中仍残留可见值 `store_a`/`store_b`，写入前在内存中转换为配置显示名并重建同一幂等键，避免升级后的首次运行重复追加；内部键不泄漏到可见列。
-- [x] 前端规则版本从 `2026-09-10-v11` 升至 `2026-09-10-v12`。BSR只接受当前请求ASIN绑定的商品详情表；AC只接受当前ASIN绑定、可见且文本精确为 `Amazon's Choice` 的商品badge，并排除推荐/隐藏节点；BSR与AC改为相互独立的存在性检查，不再因同一DOM同时出现两者把ASIN判为非法。
+- [x] （此前记录）前端规则版本从 `2026-09-10-v11` 升至 `2026-09-10-v12`。BSR只接受当前请求ASIN绑定的商品详情表；AC只接受当前ASIN绑定、可见且文本精确为 `Amazon's Choice` 的商品badge，并排除推荐/隐藏节点；BSR与AC改为相互独立的存在性检查，不再因同一DOM同时出现两者把ASIN判为非法；该规则随后由本文件顶部的 v13 Shadow DOM 证据增强取代。
 - [x] 离线回归：完整 `unittest` 套件共 `334` 项通过（退出码0）；新增推荐卡AC排除、B0DQTFFRCN当前商品AC回放、旧店铺占位名迁移和真实显示店铺名/幂等回读覆盖，规则变更前后均无失败。
 
 云端核验记录：18/18业务表 `header_ok=true`；Feedback `A1:I1`严格9列、`index=18`；剩余子表标题共19个，顺序末尾为 `Feedback差评汇总`。本节为测试表结构变更证据，不代表已运行一次新的全量价格或Feedback采集。

@@ -192,7 +192,7 @@ amazon_daily_structured_20260821/
 | Q | BSR | 只在当前请求ASIN绑定的商品详情表中查找`Best Sellers Rank`字段；排除导航、推荐、赞助和其他ASIN区域。找到当前商品字段写`✅`，明确没有写`❌`；不与AC结果互相否定 |
 | R | 父ASIN发散 | 页面正常且明确列出至少一个不同的子体/变体ASIN时写`✅`；当前ASIN页面没有任何子体时写`❌` |
 | S | 环保标 | 当前商品存在完整商品级 Climate Pledge Friendly 标志链时写`✅`；仅有空占位、品牌可持续文案或不完整容器时写`❌` |
-| T | AC标 | 只在当前请求ASIN绑定的可见`#acBadge_feature_div`商品模块中查找文本精确为`Amazon's Choice`的实际badge；排除隐藏说明、推荐卡和其他ASIN区域。存在写`✅`，明确为空或不存在写`❌`；不与BSR结果互相否定 |
+| T | AC标 | 只在当前请求ASIN绑定的可见`#acBadge_feature_div`商品模块中查找文本精确为`Amazon's Choice`的实际badge；同时支持该模块的可见Shadow DOM徽章文本；排除隐藏说明、推荐卡和其他ASIN区域。存在写`✅`，明确为空或不存在写`❌`；不与BSR结果互相否定 |
 | U | 时间戳 | 本条抓取/计算时间；不是表名更新时间 |
 | V | Amazon链接 | 本商品标准URL |
 
@@ -269,12 +269,12 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 - 尺寸一致性：读取当前选中变体或购买区展示尺寸，统一大小写、空格、乘号、单位和英制/公制书写后与周报预期尺寸比较；同一单位写在两个数字后（`8' x 10'`）或只写在末尾（`8 x 10 ft`）视为等价，英尺小数与英尺加英寸（`2.5'`与`2'6\"`）按英寸换算后比较，混合单位仍严格比较。页面尺寸后的`Rectangular`等非数值说明不参与比较。只有存在明确预期值且页面明确选中同一变体才可`pass`；缺少预期、未选中变体或多个尺寸无法确定时为`unknown`。
 - 页面商品身份：在单项字段检查前，优先读取主商品`#title_feature_div[data-csa-c-asin]`，旧布局再回退到`#ASIN[value]`，并读取页面URL中的ASIN；至少必须存在一个可验证的当前商品身份锚点。若页面主商品ASIN或页面URL中的ASIN与请求ASIN不一致，或者两类身份锚点均缺失，N:T全部为`unknown`并显示`-`，不得从页面中其他商品模块拼接部分结果。
 - BSR：读取当前商品详情表的`th.prodDetSectionEntry`字段，字段文本规范化后必须精确等于`Best Sellers Rank`，祖先必须属于`#prodDetails`、`#productDetails_feature_div`或`.prodDetTable`，并且同一详情表的`ASIN`行必须等于当前请求ASIN；没有ASIN行时才允许使用该详情链上的`data-csa-c-asin`/`data-asin`作为回退。Amazon页面常把该详情表放在折叠的`.a-expander-content`中；只要该字段属于当前ASIN详情表，就计为存在，不把“折叠”误判为缺失。导航中的`Best Sellers`、推荐/广告/轮播或其他ASIN区域的文字不计入。该项只判断字段存在，不读取实时排名数值。
-- Amazon's Choice：只检查当前ASIN对应的`#acBadge_feature_div`，该容器或其祖先的`data-csa-c-asin`/`data-asin`必须包含当前请求ASIN，并且其可见后代节点必须有规范化后精确等于`Amazon's Choice`的实际badge文本。`a-popover-preload`、`aria-hidden=true`、`aok-hidden`、`aok-offscreen`及其他隐藏说明文本不计入；空占位容器、ASIN不一致的变体、导航、推荐商品或其他ASIN区域不计入。
+- Amazon's Choice：只检查当前ASIN对应的`#acBadge_feature_div`，该容器或其祖先的`data-csa-c-asin`/`data-asin`必须包含当前请求ASIN，并且其可见后代节点必须有规范化后精确等于`Amazon's Choice`的实际badge文本。对现代页面若徽章仅存在于该容器的开放Shadow DOM，由同一次页面快照在浏览器侧递归检查该容器内所有可见后代（优先记录`.mvt-ac-badge-*`/`.ac-badge-*`节点）并回传带当前ASIN绑定的证据后再判定；不得以Shadow DOM中不可见或无法绑定ASIN的文本补齐。`a-popover-preload`、`aria-hidden=true`、`aok-hidden`、`aok-offscreen`及其他隐藏说明文本不计入；空占位容器、ASIN不一致的变体、导航、推荐商品或其他ASIN区域不计入。
 - BSR与Amazon's Choice的“唯一性”只要求各自归属于当前ASIN；两项是独立的存在性检查，不能因为同一份DOM同时出现两者就把ASIN判为不合法或互相改写为`fail`。页面身份门禁失败时七项统一为`unknown`并显示`-`。
 - 父子ASIN发散：只读取`#inline-twister-expander-content-*`变体区域下面的`li.inline-twister-swatch[data-asin]`，从这些子体节点提取ASIN并排除当前请求ASIN。至少还有一个不同ASIN为`pass`；变体区域存在但没有不同ASIN为`fail`；变体区域无法确认时为`unknown`。`#twisterPlusPriceSubtotalWWDesktop_feature_div`只属于价格汇总，不再作为父子ASIN证据。
 - 环保标：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`必须存在非空的`data-csa-c-asin`且其值必须与当前页面ASIN一致；缺失或不一致均不得通过。该模块后代还必须同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
 
-所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将可见列改为N商品主图、O品牌故事、Q BSR、R父ASIN发散、S环保标、T AC标，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点；BSR和AC均采用当前商品作用域内的独立存在性规则，规则版本升级为`2026-09-10-v12`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
+所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将可见列改为N商品主图、O品牌故事、P前端尺寸、Q BSR、R父ASIN发散、S环保标、T AC标，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点；BSR和AC均采用当前商品作用域内的独立存在性规则，AC补充开放Shadow DOM可见徽章证据回传，规则版本升级为`2026-09-10-v13`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
 
 ### 6.2 后台Feedback来源和筛选
 

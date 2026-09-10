@@ -142,6 +142,36 @@ class FrontendChecksTest(unittest.TestCase):
         self.assertEqual(checks['bsr_badge']['status'], 'fail')
         self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
 
+    def test_modern_ac_badge_text_can_be_split_across_badge_spans(self):
+        checks = inspect_frontend(
+            '<div id="acBadge_feature_div" data-csa-c-asin="B000000001">'
+            '<div class="badge-wrapper"><span class="ac-badge-rectangle">'
+            '<span class="ac-badge-text-primary">Amazon\'s\u200b</span>'
+            '<span class="ac-badge-text-secondary">Choice</span>'
+            '</span></div></div>',
+            '8x10', 'B000000001', page_url='https://www.amazon.com/dp/B000000001')
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+
+    def test_live_shadow_ac_marker_requires_visible_current_asin(self):
+        html = (
+            '<div id="title_feature_div" data-csa-c-asin="B000000001"></div>'
+            '<div id="acBadge_feature_div" data-csa-c-asin="B000000001"></div>')
+        checks = inspect_frontend(
+            html, '8x10', 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001',
+            live_ac_badge={'visible': True, 'asin': 'B000000001',
+                           'text': "Amazon's Choice", 'locator': '#acBadge_feature_div (live badge)'})
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['evidence_locator'],
+                         '#acBadge_feature_div (live badge)')
+
+        wrong_asin = inspect_frontend(
+            html, '8x10', 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001',
+            live_ac_badge={'visible': True, 'asin': 'B000000002',
+                           'text': "Amazon's Choice"})
+        self.assertEqual(wrong_asin['amazon_choice_badge']['status'], 'fail')
+
     def test_product_badges_must_belong_to_requested_asin(self):
         checks = inspect_frontend(
             '<div id="title_feature_div" data-csa-c-asin="B000000001"></div>'

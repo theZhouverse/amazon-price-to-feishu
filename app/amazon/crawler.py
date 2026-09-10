@@ -337,7 +337,88 @@ class AmazonBrowser:
 
             tab.set.timeouts(script=budget(cfg['page_timeout']))
             # One JavaScript turn freezes identity, location and HTML together.
-            sample = tab.run_js('''const clone = document.documentElement.cloneNode(true);
+            # AC can be painted by a custom element's open Shadow DOM; that
+            # subtree is intentionally absent from outerHTML. Capture only a
+            # visibility-checked, current-ASIN-bound badge marker so the pure
+            # offline parser can consume the same snapshot without guessing.
+            sample = tab.run_js('''
+                const visible = (el) => {
+                    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+                    let current = el;
+                    while (current) {
+                        const cs = getComputedStyle(current);
+                        if (cs.display === 'none' || cs.visibility === 'hidden' ||
+                            cs.visibility === 'collapse' || Number(cs.opacity) === 0 ||
+                            current.getAttribute('aria-hidden') === 'true' ||
+                            current.hasAttribute('hidden')) return false;
+                        current = current.parentElement ||
+                            (current.getRootNode()?.host || null);
+                    }
+                    return el.getClientRects().length > 0;
+                };
+                const elements = (root) => {
+                    const out = [];
+                    const walk = (node) => {
+                        if (!node) return;
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            out.push(node);
+                            if (node.shadowRoot) walk(node.shadowRoot);
+                            for (const child of node.children) walk(child);
+                        } else if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+                            for (const child of node.children || []) walk(child);
+                        }
+                    };
+                    walk(root);
+                    return out;
+                };
+                const visibleText = (root) => {
+                    const chunks = [];
+                    const walk = (node) => {
+                        if (!node) return;
+                        if (node.nodeType === Node.TEXT_NODE) {
+                            const parent = node.parentElement;
+                            if (parent && visible(parent)) chunks.push(node.nodeValue || '');
+                            return;
+                        }
+                        if (node.nodeType !== Node.ELEMENT_NODE &&
+                            node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
+                        if (node.nodeType === Node.ELEMENT_NODE && !visible(node)) return;
+                        if (node.shadowRoot) walk(node.shadowRoot);
+                        for (const child of node.childNodes || []) walk(child);
+                    };
+                    walk(root);
+                    return chunks.join(' ').replace(/\\s+/g, ' ').trim();
+                };
+                const normalizedChoice = (value) => String(value || '')
+                    .replace(/\\s+/g, ' ').trim();
+                const choiceRe = /^amazon['’]?s\\s*choice$/i;
+                const pageAsin = String(document.querySelector('#ASIN')?.value || '')
+                    .toUpperCase().trim();
+                let ac_badge = {visible:false, text:'', locator:'', asin:''};
+                const acRoots = [...document.querySelectorAll('#acBadge_feature_div')];
+                for (const acRoot of acRoots) {
+                    const rootAsin = String(acRoot.getAttribute('data-csa-c-asin') ||
+                        acRoot.getAttribute('data-asin') || '').toUpperCase().trim();
+                    if (!rootAsin || (pageAsin && rootAsin !== pageAsin)) continue;
+                    // The class name varies by desktop/mobile experiment. The
+                    // bound AC feature container is already a strong scope,
+                    // so inspect every visible descendant and use marker
+                    // classes only as a diagnostic hint, not as a hard gate.
+                    const candidates = elements(acRoot).filter(visible);
+                    for (const candidate of candidates) {
+                        const labels = [visibleText(candidate),
+                            candidate.getAttribute('aria-label') || '']
+                            .map(normalizedChoice).filter(Boolean);
+                        const text = labels.find((value) => choiceRe.test(value)) || '';
+                        if (text) {
+                            ac_badge = {visible:true, text:text,
+                                locator:'#acBadge_feature_div (live badge)', asin:rootAsin};
+                            break;
+                        }
+                    }
+                    if (ac_badge.visible) break;
+                }
+                const clone = document.documentElement.cloneNode(true);
                 const selector = '[id*="corePrice"],.priceToPay,.apex-pricetopay-value,#buybox,[id*="coupon" i],[class*="coupon" i],.a-alert-content,.a-alert-container,.savingsPercentage,.apex-savings-percentage,#availability';
                 const live = document.documentElement.querySelectorAll(selector);
                 const copied = clone.querySelectorAll(selector);
@@ -348,7 +429,7 @@ class AmazonBrowser:
                 return {url:location.href,title:document.title,
                 asin:document.querySelector('#ASIN')?.value || '',
                 postal:document.querySelector('#glow-ingress-line2')?.innerText || '',
-                html:clone.outerHTML};''', timeout=budget(cfg['page_timeout']))
+                html:clone.outerHTML,ac_badge:ac_badge};''', timeout=budget(cfg['page_timeout']))
             budget(cfg['page_timeout'])
             cr.page_url, cr.page_title = sample['url'], sample['title'][:200]
             if any(k in cr.page_title.lower() for k in TITLE_404):
@@ -376,7 +457,8 @@ class AmazonBrowser:
             try:
                 cr.frontend_checks = inspect_frontend(
                     sample['html'], row.size, row.asin,
-                    page_ready=True, page_status='ok', page_url=cr.page_url)
+                    page_ready=True, page_status='ok', page_url=cr.page_url,
+                    live_ac_badge=sample.get('ac_badge'))
             except Exception as exc:
                 # A selector failure is explicit unknown, never a fabricated
                 # pass and never a price crawl failure.

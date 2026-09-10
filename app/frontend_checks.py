@@ -16,7 +16,7 @@ from decimal import Decimal
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v12'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v13'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -547,7 +547,15 @@ def _product_bsr(raw_nodes: list, asin: str = '') -> tuple[bool, str, str]:
     return False, '', ''
 
 
-def _product_choice(nodes: list, asin: str = '') -> tuple[bool, str, str]:
+def _choice_text(value: object) -> str:
+    """Normalize the small visible label used by Amazon's Choice badges."""
+    text = str(value or '').replace('\u200b', '').replace('\u200c', '') \
+        .replace('\u200d', '').replace('\ufeff', '')
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _product_choice(nodes: list, asin: str = '',
+                    live_evidence: dict | None = None) -> tuple[bool, str, str]:
     """Match the visible current-product Amazon's Choice badge.
 
     ``#acBadge_feature_div`` often contains a hidden preloaded explanation
@@ -556,6 +564,19 @@ def _product_choice(nodes: list, asin: str = '') -> tuple[bool, str, str]:
     exactly ``Amazon's Choice`` and ignore hidden/preloaded descendants.
     """
     choice_re = re.compile(r"^amazon['’]?s\s*choice$", re.I)
+    # Modern Amazon layouts can render the badge inside an open Shadow DOM.
+    # ``document.documentElement.outerHTML`` does not contain that subtree, so
+    # the crawler supplies a separately captured, visibility-checked marker.
+    # Never accept it without an explicit current-ASIN binding.
+    if isinstance(live_evidence, dict):
+        evidence_asin = str(live_evidence.get('asin') or '').upper().strip()
+        evidence_text = _choice_text(live_evidence.get('text'))
+        if (live_evidence.get('visible') is True
+                and evidence_asin
+                and evidence_asin == str(asin or '').upper().strip()
+                and choice_re.fullmatch(evidence_text)):
+            return True, str(live_evidence.get('locator') or
+                             '#acBadge_feature_div (shadow DOM)'), evidence_text
     for root in nodes:
         ident = str(getattr(root, 'attrs', {}).get('id') or '').lower()
         if (ident != 'acbadge_feature_div'
@@ -566,7 +587,7 @@ def _product_choice(nodes: list, asin: str = '') -> tuple[bool, str, str]:
         for node in _walk_descendants(root):
             if _hidden_evidence(node):
                 continue
-            text = re.sub(r'\s+', ' ', _text(node)).strip()
+            text = _choice_text(_text(node))
             if choice_re.fullmatch(text):
                 return True, _locator(root), text
     return False, '', ''
@@ -660,7 +681,8 @@ def _result(key: str, observed: str, status: str, reason: str, locator: str,
 
 def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
                      page_ready: bool = True, page_status: str = 'ok',
-                     page_url: str = '', captured_at: str = '') -> dict[str, dict]:
+                     page_url: str = '', captured_at: str = '',
+                     live_ac_badge: dict | None = None) -> dict[str, dict]:
     """Inspect all seven checks from one already-loaded DOM snapshot."""
     if not page_ready or page_status in _GATE_STATUSES:
         return unknown_checks(
@@ -719,7 +741,8 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
         size_status, size_reason = 'fail', '当前选中尺寸与周报预期不一致'
 
     bsr, bsr_locator, bsr_observed = _product_bsr(raw_nodes, asin)
-    choice, choice_locator, choice_observed = _product_choice(nodes, asin)
+    choice, choice_locator, choice_observed = _product_choice(
+        nodes, asin, live_evidence=live_ac_badge)
     variant_status, variant_observed, variant_locator = _variant_check(nodes, asin)
     eco, eco_locator, eco_observed = _product_eco(raw_nodes, asin)
 
