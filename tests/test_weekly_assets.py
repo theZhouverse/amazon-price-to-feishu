@@ -113,6 +113,42 @@ class TestWeeklyAssets(unittest.TestCase):
                              'snapshot-1')
             self.assertEqual(rebuilt['snapshot']['spreadsheet_token'], 'snapshot-2')
 
+    def test_fixed_result_is_also_granted_manager_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WeeklyAssetStore(Path(tmp))
+            store.root.mkdir(parents=True, exist_ok=True)
+            (store.root / 'fixed_result.json').write_text(
+                '{"spreadsheet_token":"fixed-result","url":"https://x/sheets/fixed-result"}',
+                encoding='utf-8')
+            fc = Mock()
+            fc.cfg = {'feishu_allowed_hosts': ['x']}
+            fc.resolve_wiki_obj.return_value = ('source', 'sheet')
+            structure = {'sheet_count': 1, 'sheets': [{'title': 'PD03'}], 'sha256': 'hash'}
+            fc.spreadsheet_structure.return_value = structure
+            fc.wait_spreadsheet_structure.return_value = structure
+            fc.list_root_files.return_value = []
+            fc.copy_file.return_value = {'token': 'snapshot', 'url': 'snapshot-url'}
+            fc.query_sheets.return_value = [{'sheet_id': 'default'}]
+            fc.ensure_permission_member.return_value = {
+                'member_id': 'ou_admin', 'member_type': 'openid',
+                'perm': 'full_access', 'verified': True, 'reused': False}
+            selection = SimpleNamespace(period_id='seq-fixed', source_url='https://x/wiki/y',
+                                        row_number=2)
+            registry = {'url': 'https://x/wiki/r', 'spreadsheet_token': 'registry',
+                        'sheet_id': 's1'}
+
+            manifest, reused = initialize_weekly_assets(
+                fc, store, selection, registry, manager_open_id='ou_admin')
+
+            self.assertFalse(reused)
+            self.assertEqual(manifest['result']['spreadsheet_token'], 'fixed-result')
+            self.assertEqual(manifest['human_manager']['result']['perm'], 'full_access')
+            self.assertEqual(manifest['human_manager']['result']['fixed_result'], True)
+            self.assertEqual(fc.ensure_permission_member.call_count, 2)
+            self.assertEqual(
+                fc.ensure_permission_member.call_args_list[-1].args[:3],
+                ('fixed-result', 'sheet', 'ou_admin'))
+
     def test_initialize_requires_human_manager(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = WeeklyAssetStore(Path(tmp))

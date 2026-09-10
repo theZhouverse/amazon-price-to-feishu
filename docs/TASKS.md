@@ -372,6 +372,7 @@
   - 验证：同一 period 连续初始化两次返回相同快照和结果表；并发初始化不重复创建；缺少初始化的普通任务安全退出
   - 验证记录（2026-08-24）：新增 `weekly_assets.py`，实现 manifest 原子写入、周期排他锁、精确名称中断恢复、Token 写入保护、generation/history、显式重建和普通任务 `business_ready` 门禁。定向测试最终 5/5 通过（0.026s），覆盖并发锁、重复初始化复用、只允许结果表写入、重建保留历史及缺失/未映射 manifest 安全退出；最终完整离线回归 92/92 通过（0.086s）。无 `--confirm` 命令安全退出。真实 `--new-week --confirm` 首次创建 `seq-1` generation 1：正式快照 `GQJgs...Fnec`、正式结果表 `UWLds...AnNf`，15.859s；第二次只读校验后 `reused=True`，Token 完全一致、无重复资源，10.641s。manifest 状态/快照/结果均为 ready，快照 readonly、结果 readwrite，敏感键扫描无 App Secret、tenant token 或 Cookie。真实日常 `--dry-run --limit 1` 门禁在登记表读取后因 `business_ready=false` 于 10.6s 内退出，未启动 Amazon 或业务写入。证据：`outputs/weekly_runs/seq-1/weekly_manifest.json` 与对应运行日志；真实重建未执行，避免无必要新增云端资源，离线测试已验证 generation 递增和 history 保留。提交号待本阶段统一提交时补记。
   - 权限增强记录（2026-08-25）：新增`feishu_manager_open_id`和`ensure_permission_member`，每次创建或复用快照、独立结果表均幂等授予指定人工账号容器级`full_access`；缺少配置或授权失败时初始化不得ready。固定参考表协作者反查确认周成业Open ID为`ou_68e7d2af96255c1eeb1eea8021c80ea4`。现有正式快照`GQJgs...Fnec`和结果表`UWLds...AnNf`已补授权并回查为`openid/full_access/container`，两次均为首次新增；完整回归148/148通过（0.174s）。
+  - 权限规则补强（2026-09-10）：发现复用`fixed_result.json`时旧逻辑仅标记`fixed_result=true`而未执行权限回查，导致已存在的结果表可能只有应用自身权限。现已改为创建、复制和复用固定结果表统一调用`ensure_permission_member(..., openid, full_access)`并回读；新增固定结果回归测试，定向测试22/22通过。当前前端验证表`TEST_前端真实页面验证_20260910_083515`已对周成业补授并回查为`openid/full_access`，权限列表中应用本身与周成业均存在。
 
 #### Gate B：数据映射与 US/CA 抓取
 
