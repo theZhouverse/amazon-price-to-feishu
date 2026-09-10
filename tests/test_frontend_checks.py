@@ -197,6 +197,26 @@ class FrontendChecksTest(unittest.TestCase):
             '2.5x8', 'B000000001', page_url='https://www.amazon.com/dp/B000000001')
         self.assertEqual(checks['size_consistent']['status'], 'pass')
 
+    def test_dimension_units_accept_one_trailing_unit_for_both_sides(self):
+        checks = inspect_frontend(
+            '<div id="inline-twister-expander-header-size_name" '
+            'aria-label="Selected Size is 8 x 10 ft.">'
+            '<span id="inline-twister-expanded-dimension-text-size_name">'
+            '8 x 10 ft</span></div>',
+            "8'X10'", 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001')
+        self.assertEqual(checks['size_consistent']['status'], 'pass')
+
+    def test_dimension_units_convert_decimal_feet_to_feet_and_inches(self):
+        checks = inspect_frontend(
+            '<div id="inline-twister-expander-header-size_name" '
+            'aria-label="Selected Size is 2\'6\" x 8\' (Rectangular).">'
+            '<span id="inline-twister-expanded-dimension-text-size_name">'
+            '2\'6\" x 8\' (Rectangular)</span></div>',
+            "2.5'X8'", 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001')
+        self.assertEqual(checks['size_consistent']['status'], 'pass')
+
     def test_visible_columns_use_checkmarks_but_counts_keep_raw_statuses(self):
         checks = inspect_frontend(
             '<div id="imageBlock_feature_div"><img src="main.jpg"></div>'

@@ -11,11 +11,12 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
+from decimal import Decimal
 
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-09-v10'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v11'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -288,10 +289,75 @@ def normalize_dimension(value) -> str:
 
 
 def _dimension_signature(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return canonical inch values for unit-bearing dimensions.
+
+    Amazon may render 2.5 feet as ``2'6\"``.  Comparing the visible numbers
+    directly would incorrectly treat those as three components (2, 6, 8), so
+    compound feet/inches components are converted to one canonical value.
+    Unitless source values remain raw and are handled conservatively by the
+    caller for backwards compatibility with existing weekly sheets.
+    """
     normalized = normalize_dimension(value)
-    numbers = tuple(re.findall(r'\d+(?:\.\d+)?', normalized))
-    units = tuple(re.findall(r'(?<![a-z])(in|cm|ft|m)(?![a-z])', normalized))
-    return numbers, units
+    raw_numbers = tuple(re.findall(r'\d+(?:\.\d+)?', normalized))
+    raw_units = tuple(re.findall(r'(?<![a-z])(in|cm|ft|m)(?![a-z])', normalized))
+    if not raw_units:
+        return raw_numbers, ()
+
+    parts = re.split(r'\s*[x*]\s*', normalized, maxsplit=1)
+    default_unit = next((unit for part in parts
+                         for unit in ('ft', 'in', 'cm', 'm')
+                         if re.search(rf'\b{unit}\b', part)), '')
+
+    def parse_part(part: str):
+        part = re.sub(r'\s*\([^)]*\).*$', '', part).strip()
+        number = r'(\d+(?:\.\d+)?)'
+        match = re.match(rf'^{number}\s*ft\s*{number}\s*in\b', part)
+        if match:
+            return Decimal(match.group(1)) * 12 + Decimal(match.group(2))
+        match = re.match(rf'^{number}\s*ft\b', part)
+        if match:
+            return Decimal(match.group(1)) * 12
+        match = re.match(rf'^{number}\s*in\b', part)
+        if match:
+            return Decimal(match.group(1))
+        match = re.match(rf'^{number}\s*cm\b', part)
+        if match:
+            return Decimal(match.group(1)) * Decimal('0.3937007874015748')
+        match = re.match(rf'^{number}\s*m\b', part)
+        if match:
+            return Decimal(match.group(1)) * Decimal('39.37007874015748')
+        match = re.match(rf'^{number}', part)
+        if not match or not default_unit:
+            return None
+        value = Decimal(match.group(1))
+        return {
+            'ft': value * 12,
+            'in': value,
+            'cm': value * Decimal('0.3937007874015748'),
+            'm': value * Decimal('39.37007874015748'),
+        }[default_unit]
+
+    values = [parse_part(part) for part in parts]
+    if not values or any(value is None for value in values):
+        return raw_numbers, raw_units
+    return tuple(format(value.normalize(), 'f') for value in values), tuple('in' for _ in values)
+
+
+def _raw_dimension_numbers(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r'\d+(?:\.\d+)?', normalize_dimension(value)))
+
+
+def _expanded_dimension_units(numbers: tuple[str, ...],
+                              units: tuple[str, ...]) -> tuple[str, ...]:
+    """Expand one trailing unit to each dimension component.
+
+    Amazon uses both ``8 x 10 ft`` and ``8' x 10'`` for the same rug. The
+    former has one unit after the whole expression while the latter has one
+    unit after each number. Mixed-unit expressions remain strict.
+    """
+    if len(units) == 1 and len(numbers) > 1:
+        return units * len(numbers)
+    return units
 
 
 def _looks_like_dimension(value: str) -> bool:
@@ -627,10 +693,21 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     observed_norm = normalize_dimension(observed)
     expected_numbers, expected_units = _dimension_signature(expected)
     observed_numbers, observed_units = _dimension_signature(observed_norm)
-    dimensions_match = (
-        bool(expected_numbers) and expected_numbers == observed_numbers
-        and (not expected_units or expected_units == observed_units)
-    )
+    if not expected_units:
+        # Existing source rows without units are compared by their displayed
+        # numeric components, preserving the historical 2.5x8 vs 2.5' x 8'
+        # compatibility rule.
+        dimensions_match = (
+            bool(_raw_dimension_numbers(expected))
+            and _raw_dimension_numbers(expected) == _raw_dimension_numbers(observed_norm)
+        )
+    else:
+        dimensions_match = (
+            bool(expected_numbers) and expected_numbers == observed_numbers
+            and bool(observed_units)
+            and _expanded_dimension_units(expected_numbers, expected_units)
+            == _expanded_dimension_units(observed_numbers, observed_units)
+        )
     if not expected or not observed_norm or not observed_numbers:
         size_status, size_reason = 'unknown', '缺少明确的周报预期尺寸或当前选中尺寸'
     elif dimensions_match:
