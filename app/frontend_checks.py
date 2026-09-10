@@ -39,7 +39,7 @@ CHECK_KEYS = (
 FRONTEND_HEADERS = (
     '商品主图',
     '品牌故事',
-    '前端尺寸是否一致',
+    '前端尺寸',
     'BSR',
     '父ASIN发散',
     '环保标',

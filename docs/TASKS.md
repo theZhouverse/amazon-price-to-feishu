@@ -3,7 +3,8 @@
 ## 2026-09-10 测试表字段、Feedback顺序与前端标志规则更新（最新）
 
 - [x] 仅在用户指定的隔离测试表 [GA6PsnlcjhTGsqtBocdcVct7n2e](https://wit0jhu6kvu.feishu.cn/sheets/GA6PsnlcjhTGsqtBocdcVct7n2e?sheet=JMa2c) 执行云端结构调整；固定生产结果表 `Epads8MQkhkuBctjl3lcqLUvnCg` 未读取写入、未改名、未删除子表。
-- [x] 测试表18个业务子表（PD/XD/CPD/PDF）逐表读取 `A2:V2` 并确认22列表头已完全匹配当前 `RESULT_HEADERS`：L=`价格一致性`、N=`商品主图`、O=`品牌故事`、Q=`BSR`、R=`父ASIN发散`、S=`环保标`、T=`AC标`；不存在HTML列。
+- [x] 测试表18个业务子表（PD/XD/CPD/PDF）逐表读取 `A2:V2` 并确认22列表头已完全匹配当前 `RESULT_HEADERS`：L=`价格一致性`、N=`商品主图`、O=`品牌故事`、P=`前端尺寸`、Q=`BSR`、R=`父ASIN发散`、S=`环保标`、T=`AC标`；不存在HTML列。
+- [x] 用户确认将P列可见标题由`前端尺寸是否一致`简化为`前端尺寸`。仅调整列头文案，尺寸一致性判定、内部键`size_consistent`、bundle证据及A:V列位置保持不变；已同步代码、SPEC、REVIEWS和本测试表并完成写后读回。
 - [x] 对测试表完全空白的 `Sheet1`（原ID `b82298`）执行整表空值预检后删除；未发现名为 `Feedback????` 的遗留子表，因此没有扩大删除范围。
 - [x] 测试表新增固定9列表头的 `Feedback差评汇总`（Sheet ID `49WYs8`），位置读回为最后一个子表（index 18）；本次没有伪造反馈业务行，等待后续正式Feedback任务写入。
 - [x] 代码将 `store_a`/`store_b` 保留为内部采集键，Feedback可见“店铺”列改由配置显示名输出：`冬豚`、`北蓉`；幂等键仍稳定，重复运行不会因显示名转换产生重复行。

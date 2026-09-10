@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from frontend_checks import (  # noqa: E402
     CHECK_KEYS,
     FRONTEND_CHECK_RULE_VERSION,
+    FRONTEND_HEADERS,
     frontend_columns,
     frontend_status_counts,
     inspect_frontend,
@@ -16,6 +17,12 @@ from frontend_checks import (  # noqa: E402
 
 
 class FrontendChecksTest(unittest.TestCase):
+    def test_visible_headers_use_business_names(self):
+        self.assertEqual(
+            FRONTEND_HEADERS,
+            ('商品主图', '品牌故事', '前端尺寸', 'BSR', '父ASIN发散', '环保标', 'AC标'),
+        )
+
     def test_same_snapshot_produces_seven_evidence_rich_values(self):
         html = '''
         <div id="imageBlock_feature_div"><img id="landingImage" src="main.jpg"></div>
