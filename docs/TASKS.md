@@ -11,6 +11,7 @@
 - [x] 正式同入口单条实时只读预跑`20260911_001435`通过：`PD03/B0C5R56QTF`、`period=seq-4`、`source_period_id=seq-4`、`scheduled_slot=weekday_1530`、`selection_mode=weekday_steady`、`status=ok`、`USD`、邮编验证通过，BSR=`pass`、AC=`fail`、前端规则v14；耗时51.547秒，未写飞书、未发送通知。
 - [x] 加拿大站同入口单条实时只读预跑`20260911_002057`通过：`CPD03/B0BNDLKP54`落地`https://www.amazon.ca/dp/B0BNDLKP54?th=1`，`status=ok`、`marketplace=CA`、`CAD`、加拿大位置验证通过，BSR=`pass`、AC=`fail`、前端规则v14；耗时46.157秒，未写飞书、未发送通知。该样本证明CA主链可用，不代表其它重定向ASIN已修复。
 - [x] 最终验证：338项unittest全部通过；Python `compileall`、三份PowerShell脚本语法、两份JSON配置解析、`git diff --check`均通过；真实VBS参数转发探针退出码0并已删除临时探针文件。
+- [x] 本轮16个代码、测试和关联文档文件已固定为本地提交`29d4a3c`（`fix: harden frontend rules and scheduled slots`）；当前未推送远程，不把本地提交误报为GitHub已更新。
 - [ ] 2026-09-11 07:30真实全量仍是最终在线验收：需核对scheduler START/END与UTF-8、`weekday_0730/weekday_steady/seq-4`、18表写入/阻断、CA身份异常、Feedback增量3日/10日留存、固定表回读和全员通知。计划任务存在与单条预跑不能替代该结果。
 
 ## 2026-09-10 BSR/AC规则按开发SPEC重新对齐（最新）
