@@ -1,5 +1,14 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-10 测试表结构与BSR/AC规则复核（最新）
+
+- 用户指定的隔离测试表 `GA6PsnlcjhTGsqtBocdcVct7n2e` 已完成结构读回：18个商品子表的 `A2:V2` 全部匹配22列当前布局，表头使用 `价格一致性`、`商品主图`、`品牌故事`、`BSR`、`父ASIN发散`、`环保标`、`AC标`；未修改固定生产结果表。
+- 完全空白的 `Sheet1`（`b82298`）已在整表空值预检后删除；当前没有 `Feedback????` 子表可删除。`Feedback差评汇总`已建立/确认为 `49WYs8`，9列表头读回通过并位于最后（index 18），当前无业务行写入。
+- Feedback可见店铺名规则已落地：配置真实显示名为“冬豚”“北蓉”，`store_a`/`store_b`只留在内部路由和审计；发布矩阵和重读矩阵回归通过，未改变9列表头。
+- 发布器已加入旧数据兼容：历史可见 `store_a`/`store_b` 行在写入前会按配置转换为“冬豚”/“北蓉”并重建相同幂等键，避免升级后重复行；本次隔离测试表无业务行，因此未伪造迁移数据。
+- BSR/AC错误根因已修正：此前 `inspect_frontend` 在独立提取后又执行“同ASIN同时有BSR和AC即两列fail”的互斥门禁，导致用户示例 `B0DQTFFRCN` 的AC被错误判定。现在移除该互斥逻辑，并为AC根容器增加推荐/隐藏上下文排除；BSR继续强制当前商品详情表及ASIN绑定。测试中的同ASIN同时出现两者现在分别返回 `pass`，推荐卡/隐藏说明仍返回 `fail`。
+- 尚未完成的真实边界：当前测试表Feedback没有业务行，因此真实两店后台采集、写入和9列整表回读仍由下一次正式Feedback槽位验证；CA页面的其它身份阻断也不因本次前端标志修复而自动消失。
+
 ## 2026-09-10 生产全量运行与 Feedback 固定子表回读（最新）
 
 - 本地工作区已与 GitHub `origin/fix-codescan-20260826` 保持同分支同步（运行时合并基线 `ffcd6ea`）；本次仅将生产配置 `feedback.enabled` 从 `false` 改为 `true`，未复制或打印任何 Secret。
@@ -139,7 +148,7 @@
 ## 2026-09-08 新增前端检查与Feedback范围（本地核心已实现，外部验收未完成）
 
 - 开发副本已增加同页七项前端检查、证据字段和A:V发布/迁移逻辑；当前目标顺序为H:M价格/币种、N:T前端勾叉、U/V时间戳/链接。固定结果表的真实表头、旧A:P/A:O迁移、整行回读和历史bundle兼容尚未在线验收。在完成这些门禁前，生产目录仍按A:O价格基线，不得向云端写入新增N:T。
-- 七项检查中只有尺寸需要周报预期字段；N列主图与O列`From the brand`品牌故事图片独立判断；BSR、环保标志和Amazon's Choice按当前商品页面存在性提取，但业务规则要求同一ASIN不能同时有BSR和Amazon's Choice；如果两者同时存在，Q/T均为`fail`并记录“ASIN不合法”。新增主商品`#title_feature_div[data-csa-c-asin]`身份门禁；`B0G5Y2TJQM`历史文件的页面内部ASIN锚点指向`B0GZZH77J1`，其叶子图标实际属于推荐卡`B09S3RCVJ5`，因此该文件正式应整页`unknown`，不能拿其他商品的环保标或BSR。`B0BNDLPW1L`原始HTML的`#acBadge_feature_div`和详情表确实带当前ASIN，且存在可见`mvt-ac-badge-rectangle`与BSR行；按新业务规则，这种同时存在的组合不再输出两个通过，而是两列均失败并保留冲突证据。环保标志进一步收紧为当前ASIN对应的完整`#climatePledgeFriendlyATF_feature_div[data-csa-c-asin]`→`#climatePledgeFriendlyBadge`→`#CPF-ATF-Card`→同卡叶子图标+`.climatePledgeFriendlyProgramName`链，模块 ASIN 缺失或不一致均不计入；空的BTF/A+占位、推荐轮播和泛化文案不再计入；旧父子ASIN规则可能把价格汇总容器当变体区域，已改为读取`#inline-twister-expander-content-*`下的swatch ASIN。历史本地HTML仅用于选择器和离线样本匹配，不直接生成当前结果。实时US/CA复核和真实固定表回读仍未完成。
+- （历史v11评审记录，已由本文件最上方的v12结论替代）七项检查中只有尺寸需要周报预期字段；N列主图与O列品牌故事图片独立判断；BSR、环保标志和Amazon's Choice按当前商品页面存在性提取。早期实现曾要求同一ASIN不能同时有BSR和Amazon's Choice并将两列判定`fail`，该互斥要求现已删除；当前v12只保留各自的当前ASIN作用域门禁。其余身份、推荐卡、环保链和父子ASIN证据规则保持不变。历史本地HTML仅用于选择器和离线样本匹配，不直接生成当前结果。
 - 两个店铺Seller Central Feedback管理器的店铺标识、登录/凭证注入方式和固定Feedback子表Sheet ID尚未完成当前环境验收；在凭证、权限、分页和幂等键验证前，不得把商品Review或Q&A当作Feedback来源。
 - 前端检查已增加离线替身及bundle/summary/通知统计；Feedback已增加分页、低星、幂等合并、固定Sheet矩阵和脱敏证据替身，但两个店铺Seller Central会话/凭证引用/固定Sheet ID仍未完成当前环境验收。真实最小批之前，生产价格任务仍按A:O流程和HTML关闭边界运行。
 

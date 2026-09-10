@@ -80,7 +80,7 @@
     "折扣类型",
     "折扣值",
     "最终价格",
-    "一致性检查",
+    "价格一致性",
     "时间戳"
   ],
   "feedback": {
@@ -104,6 +104,7 @@
     "stores": [
       {
         "key": "store_a",
+        "display_name": "冬豚",
         "store_id": "26782671389969",
         "expected_store_identity": "26782671389969",
         "identity_mode": "cli_store_context",
@@ -132,6 +133,7 @@
       },
       {
         "key": "store_b",
+        "display_name": "北蓉",
         "store_id": "26686718929338",
         "expected_store_identity": "26686718929338",
         "identity_mode": "cli_store_context",

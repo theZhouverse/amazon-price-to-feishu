@@ -143,6 +143,24 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(stats['feedback_rows_expired_deleted'], 1)
         self.assertEqual(len(matrix[0]), 9)
 
+    def test_configured_display_names_are_visible_but_keys_stay_idempotent(self):
+        names = {'store_a': '冬豚', 'store_b': '北蓉'}
+        a = normalize_feedback_record(
+            raw_feedback('a', 3, '2026-09-09'), 'store_a', 'run',
+            display_store=names['store_a'])
+        b = normalize_feedback_record(
+            raw_feedback('b', 1, '2026-09-08'), 'store_b', 'run',
+            display_store=names['store_b'])
+        headers, matrix, _ = feedback_matrix(
+            [], [b, a], now=NOW, store_order=('store_a', 'store_b'),
+            store_display_names=names)
+        self.assertEqual([row[0] for row in matrix], ['冬豚', '北蓉'])
+        reparsed = parse_feedback_matrix([headers] + matrix)
+        _, matrix_again, _ = feedback_matrix(
+            reparsed, [], now=NOW, store_order=('store_a', 'store_b'),
+            store_display_names=names)
+        self.assertEqual(matrix_again, matrix)
+
     def test_legacy_a_l_header_is_rejected(self):
         with self.assertRaises(FeedbackDataError):
             parse_feedback_matrix([[
@@ -213,6 +231,26 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(fc.values[1][0], 'store_b')
         self.assertTrue(all(value == '' for value in fc.values[2][:9]))
         self.assertEqual(len(fc.backups), 1)
+
+    def test_publish_migrates_legacy_visible_store_keys_without_duplicate(self):
+        names = {'store_a': '冬豚', 'store_b': '北蓉'}
+        old = normalize_feedback_record(
+            raw_feedback('same', 2, '2026-09-09'), 'store_a', 'old')
+        # Simulate the pre-v12 visible row, while retaining all nine columns.
+        old_values = feedback_row_values(old)
+        old_values[0] = 'store_a'
+        fc = FakeFeishu([list(FEEDBACK_HEADERS), old_values])
+        incoming = [normalize_feedback_record(
+            raw_feedback('same', 2, '2026-09-09', content='updated'),
+            'store_a', 'run1', display_store=names['store_a'])]
+        with tempfile.TemporaryDirectory() as temp:
+            result = publish_feedback_sheet(
+                fc, 'spreadsheet', 'sheet', incoming, 'run1', Path(temp), now=NOW,
+                store_order=('store_a', 'store_b'), store_display_names=names)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(fc.values[1][0], '冬豚')
+        self.assertEqual(len([row for row in fc.values[1:] if any(row)]), 1)
+        self.assertEqual(fc.values[1][4], 'updated')
 
     def test_state_file_is_atomic_and_non_sensitive(self):
         with tempfile.TemporaryDirectory() as temp:

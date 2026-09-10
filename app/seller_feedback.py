@@ -18,6 +18,7 @@ import inspect
 import json
 import re
 import time
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -196,7 +197,8 @@ def normalize_feedback_record(raw: dict, store: str, run_id: str = '', *,
                               source_url: str = '', fetched_at: str = '',
                               max_rating: int = 3,
                               detail: dict | None = None,
-                              page_number: int | None = None) -> dict | None:
+                              page_number: int | None = None,
+                              display_store: str | None = None) -> dict | None:
     """Normalize one source row; return None for missing/invalid/non-eligible data."""
     if not isinstance(raw, dict):
         return None
@@ -220,11 +222,15 @@ def normalize_feedback_record(raw: dict, store: str, run_id: str = '', *,
     asin = str(_first(details, 'asin', 'ASIN')).strip()
     sku = str(_first(details, 'sku', 'SKU', 'seller_sku', 'sellerSku')).strip()
     captured = fetched_at or local_now().isoformat(timespec='seconds')
+    visible_store = str(display_store or store or '').strip()
     key, degraded = feedback_key(
-        store, feedback_id=feedback_id, feedback_date=feedback_date.isoformat(),
+        visible_store, feedback_id=feedback_id, feedback_date=feedback_date.isoformat(),
         rating=rating, order_id=order_id, content=content)
     return {
-        'store': str(store or '').strip(),
+        # The visible sheet uses the configured human-readable shop name.  The
+        # internal key remains available for ordering/audit and is never
+        # exposed by feedback_row_values().
+        'store': visible_store,
         'date': feedback_date.isoformat(),
         'rating': rating,
         'order_id': order_id,
@@ -234,6 +240,7 @@ def normalize_feedback_record(raw: dict, store: str, run_id: str = '', *,
         'sku': sku,
         'fetched_at': captured,
         '_feedback_key': key,
+        '_store_key': str(store or '').strip(),
         '_degraded_key': degraded,
         '_feedback_id': feedback_id,
         '_detail_status': 'ok' if order_item and asin and sku else 'partial',
@@ -252,7 +259,8 @@ def _page_items(page):
 
 def normalize_feedback_pages(store: str, pages: Iterable, run_id: str, *,
                              window: dict | None = None, source_url: str = '',
-                             fetched_at: str = '', max_rating: int = 3) -> tuple[list[dict], dict]:
+                             fetched_at: str = '', max_rating: int = 3,
+                             store_display_names: dict[str, str] | None = None) -> tuple[list[dict], dict]:
     """Filter and deduplicate pages from one store while retaining page stats."""
     start = parse_feedback_date((window or {}).get('start')) if window else None
     end = parse_feedback_date((window or {}).get('end')) if window else None
@@ -276,7 +284,8 @@ def normalize_feedback_pages(store: str, pages: Iterable, run_id: str, *,
                 _first(raw, 'feedback_date', 'feedback_time', 'feedbackTime', 'date', 'created_at'))
             row = normalize_feedback_record(
                 raw, store, run_id, source_url=page_url, fetched_at=fetched_at,
-                max_rating=max_rating, page_number=page_number)
+                max_rating=max_rating, page_number=page_number,
+                display_store=(store_display_names or {}).get(store, store))
             if raw_date is None:
                 page_invalid_date += 1
                 invalid_date += 1
@@ -345,19 +354,41 @@ def _merge_one(old: dict, new: dict) -> dict:
 
 def merge_feedback_rows(existing: Iterable[dict], incoming: Iterable[dict]) -> list[dict]:
     """Upsert rows by internal key and keep existing rows until retention pruning."""
+    existing_items = [row for row in existing if isinstance(row, dict)]
+    incoming_items = [row for row in incoming if isinstance(row, dict)]
+    legacy_alias_counts = Counter(
+        '|'.join((
+            str(row.get('store') or '').strip(), str(row.get('date') or '').strip(),
+            str(row.get('rating') or '').strip(), str(row.get('order_id') or '').strip(),
+        ))
+        for row in existing_items if row.get('_legacy_store_migrated')
+    )
     merged: dict[str, dict] = {}
     order: list[str] = []
-    for row in list(existing) + list(incoming):
-        if not isinstance(row, dict):
-            continue
+    # A legacy visible row cannot carry its hidden feedback ID.  During the
+    # one-time store-name migration, retain a conservative alias by
+    # store/date/rating/order so the first upgraded run can update that row even
+    # when the comment text changed.  The alias is enabled only for rows
+    # explicitly marked by publish_feedback_sheet; normal rows continue to use
+    # the strict ID-or-content-hash key from the business contract.
+    legacy_aliases: dict[str, str] = {}
+    for row in existing_items + incoming_items:
         key = _row_key(row)
         if not key:
             continue
-        if key not in merged:
-            order.append(key)
-            merged[key] = dict(row)
+        alias = '|'.join((
+            str(row.get('store') or '').strip(), str(row.get('date') or '').strip(),
+            str(row.get('rating') or '').strip(), str(row.get('order_id') or '').strip(),
+        ))
+        alias_allowed = legacy_alias_counts.get(alias, 0) == 1
+        effective_key = legacy_aliases.get(alias, key) if alias_allowed else key
+        if effective_key not in merged:
+            order.append(effective_key)
+            merged[effective_key] = dict(row)
         else:
-            merged[key] = _merge_one(merged[key], row)
+            merged[effective_key] = _merge_one(merged[effective_key], row)
+        if row.get('_legacy_store_migrated') and alias_allowed:
+            legacy_aliases[alias] = effective_key
     return [merged[key] for key in order]
 
 
@@ -381,12 +412,19 @@ def recent_feedback_rows(rows: Iterable[dict], now: datetime | None = None,
     return kept, expired, invalid
 
 
-def sort_feedback_rows(rows: Iterable[dict], store_order: Iterable[str] = DEFAULT_STORE_ORDER) -> list[dict]:
-    order = {str(store): index for index, store in enumerate(store_order)}
+def sort_feedback_rows(rows: Iterable[dict], store_order: Iterable[str] = DEFAULT_STORE_ORDER,
+                       store_display_names: dict[str, str] | None = None) -> list[dict]:
+    display_names = {str(key): str(value or key) for key, value in (store_display_names or {}).items()}
+    order = {}
+    for index, store in enumerate(store_order):
+        key = str(store)
+        order[key] = index
+        order[display_names.get(key, key)] = index
     return sorted(
         rows,
         key=lambda row: (
-            order.get(str(row.get('store') or ''), len(order)),
+            order.get(str(row.get('_store_key') or row.get('store') or ''),
+                      order.get(str(row.get('store') or ''), len(order))),
             -(parse_feedback_date(row.get('date')) or date.min).toordinal(),
             _row_key(row),
         ),
@@ -403,11 +441,12 @@ def feedback_row_values(row: dict) -> list:
 
 def feedback_matrix(existing_rows: Iterable[dict], incoming_rows: Iterable[dict], *,
                     now: datetime | None = None, retention_days: int = 10,
-                    store_order: Iterable[str] = DEFAULT_STORE_ORDER) -> tuple[list[str], list[list], dict]:
+                    store_order: Iterable[str] = DEFAULT_STORE_ORDER,
+                    store_display_names: dict[str, str] | None = None) -> tuple[list[str], list[list], dict]:
     merged = merge_feedback_rows(existing_rows, incoming_rows)
     kept, expired, invalid = recent_feedback_rows(
         merged, now, retention_days=retention_days)
-    ordered = sort_feedback_rows(kept, store_order)
+    ordered = sort_feedback_rows(kept, store_order, store_display_names)
     return list(FEEDBACK_HEADERS), [feedback_row_values(row) for row in ordered], {
         'feedback_rows_total': len(ordered),
         'feedback_rows_expired_deleted': expired,
@@ -456,6 +495,7 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
                            evidence_dir: Path, *, now: datetime | None = None,
                            retention_days: int = 10,
                            store_order: Iterable[str] = DEFAULT_STORE_ORDER,
+                           store_display_names: dict[str, str] | None = None,
                            existing_range: str = 'A1:I10000') -> dict:
     """Write/read-back a caller-registered exact nine-column Feedback sheet."""
     if not spreadsheet_token or not sheet_id:
@@ -465,10 +505,41 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
     incoming_rows = list(incoming_rows)
     values = fc.read_values(spreadsheet_token, sheet_id, existing_range)
     existing_rows = parse_feedback_matrix(values) if values else []
+    # Migrate rows written by pre-v12 code in memory before merging.  This
+    # keeps the visible value human-readable and rebuilds the same stable key,
+    # so the first post-upgrade run updates rows instead of duplicating them.
+    if store_display_names:
+        configured_display_values = {
+            str(value).strip() for value in store_display_names.values() if str(value).strip()
+        }
+        for row in existing_rows:
+            legacy_store = str(row.get('store') or '').strip()
+            display_store = store_display_names.get(legacy_store)
+            if display_store:
+                row['store'] = str(display_store).strip()
+                row['_store_key'] = legacy_store
+                row['_legacy_store_migrated'] = True
+                row['_feedback_key'], row['_degraded_key'] = feedback_key(
+                    row['store'], feedback_date=str(row.get('date') or ''),
+                    rating=row.get('rating'), order_id=str(row.get('order_id') or ''),
+                    content=str(row.get('content') or ''))
+            elif legacy_store in configured_display_values:
+                # Rows already migrated by an earlier run have no hidden
+                # feedback ID in the visible nine-column sheet.  Keep the
+                # conservative alias enabled so a changed comment still
+                # updates the same order row on the next run.
+                row['_legacy_store_migrated'] = True
     headers, data, stats = feedback_matrix(
         existing_rows, incoming_rows, now=now,
-        retention_days=retention_days, store_order=store_order)
+        retention_days=retention_days, store_order=store_order,
+        store_display_names=store_display_names)
     matrix = [headers] + data
+    # Keep the fixed Feedback tab last on every real publish.  Offline fakes
+    # need not implement sheet metadata mutation, so the optional method is
+    # intentionally feature-detected here.
+    move_to_end = getattr(fc, 'move_sheet_to_end', None)
+    if callable(move_to_end):
+        move_to_end(spreadsheet_token, sheet_id)
     fc.backup_target_sheet(spreadsheet_token, 'Feedback差评汇总', sheet_id, run_id)
 
     old_data_rows = max(0, len(values) - 1) if values else 0
@@ -519,7 +590,8 @@ def _status_for_exception(exc: Exception) -> str:
 def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                      evidence_dir: Path, *, window: dict | None = None,
                      fetched_at: str = '', max_rating: int = 3,
-                     store_order: Iterable[str] = DEFAULT_STORE_ORDER) -> dict:
+                     store_order: Iterable[str] = DEFAULT_STORE_ORDER,
+                     store_display_names: dict[str, str] | None = None) -> dict:
     """Run injected store collectors serially and persist redacted evidence."""
     started = time.monotonic()
     started_at = local_now()
@@ -556,7 +628,8 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                 })
             rows, stats = normalize_feedback_pages(
                 store, pages, run_id, window=window, source_url=source_url,
-                fetched_at=fetched_at, max_rating=max_rating)
+                fetched_at=fetched_at, max_rating=max_rating,
+                store_display_names=store_display_names)
             store_report.update(stats, rows=rows, source_url=source_url)
             all_rows.extend(rows)
         except Exception as exc:
@@ -629,6 +702,7 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
                           initial_days: int = 7, incremental_days: int = 3,
                           retention_days: int = 10, max_rating: int = 3,
                           store_order: Iterable[str] = DEFAULT_STORE_ORDER,
+                          store_display_names: dict[str, str] | None = None,
                           write: bool = False) -> dict:
     """Run collection, optional fixed-sheet publication and state advancement.
 
@@ -644,7 +718,8 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
     report = collect_feedback(
         run_id, collectors, evidence_dir, window=window,
         fetched_at=local_now(now).isoformat(timespec='seconds'),
-        max_rating=max_rating, store_order=store_order)
+        max_rating=max_rating, store_order=store_order,
+        store_display_names=store_display_names)
     sheet_report = {
         'status': 'not_configured',
         'readback': {'status': 'not_configured'},
@@ -654,7 +729,7 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
         sheet_report = publish_feedback_sheet(
             fc, spreadsheet_token, sheet_id, report.get('rows') or [], run_id,
             evidence_dir, now=now, retention_days=retention_days,
-            store_order=store_order)
+            store_order=store_order, store_display_names=store_display_names)
         report['feedback_rows_written'] = sheet_report.get('feedback_rows_written', 0)
     updated_state = advance_feedback_state(state, report, sheet_report)
     if write and can_advance_feedback_state(report, sheet_report):

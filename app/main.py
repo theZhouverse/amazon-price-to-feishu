@@ -853,7 +853,7 @@ def create_snapshot_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
 
 RESULT_HEADERS = [
     'ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式', '本周折扣%', '目标成交价',
-    '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '币种',
+    '展示价格', '折扣类型', '折扣值', '最终价格', '价格一致性', '币种',
     *FRONTEND_HEADERS, '时间戳', 'Amazon链接',
 ]
 
@@ -1216,6 +1216,12 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
             retention_days=int(feedback_cfg.get('retention_days', 10)),
             max_rating=int(feedback_cfg.get('max_rating', 3)),
             store_order=feedback_cfg.get('store_order') or ('store_a', 'store_b'),
+            store_display_names={
+                str(item.get('key')): str(item.get('display_name')).strip()
+                for item in (feedback_cfg.get('stores') or [])
+                if isinstance(item, dict) and str(item.get('key') or '').strip()
+                and str(item.get('display_name') or '').strip()
+            },
             write=should_write,
         )
         sheet = raw.get('sheet') or {}

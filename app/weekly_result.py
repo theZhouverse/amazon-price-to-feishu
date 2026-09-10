@@ -21,7 +21,7 @@ LEGACY_PRICE_RESULT_HEADERS = COMPACT_BASE_HEADERS + [
 ]
 LEGACY_RESULT_HEADERS = LEGACY_PRICE_RESULT_HEADERS[:13] + ['HTML链接', '币种', 'Amazon链接']
 PRICE_RESULT_HEADERS = COMPACT_BASE_HEADERS + [
-    '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '币种',
+    '展示价格', '折扣类型', '折扣值', '最终价格', '价格一致性', '币种',
 ]
 RESULT_HEADERS = PRICE_RESULT_HEADERS + list(FRONTEND_HEADERS) + ['时间戳', 'Amazon链接']
 

@@ -125,7 +125,7 @@ class CrawlResult:
     frontend_check_rule_version: str = ''
 
     def six_columns(self) -> list:
-        """飞书固定六列（顺序固定）：展示价格/折扣类型/折扣值/最终价格/一致性检查/时间戳"""
+        """飞书固定六列（顺序固定）：展示价格/折扣类型/折扣值/最终价格/价格一致性/时间戳"""
         def _num(d: Decimal | None) -> float | None:
             return round(float(d), 2) if d is not None else None
         return [

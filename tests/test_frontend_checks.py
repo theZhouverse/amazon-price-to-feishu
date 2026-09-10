@@ -1,4 +1,5 @@
 import sys
+import re
 import unittest
 from pathlib import Path
 
@@ -79,7 +80,7 @@ class FrontendChecksTest(unittest.TestCase):
         self.assertEqual(checks['brand_story_image']['status'], 'fail')
         self.assertIn('heading=missing', checks['brand_story_image']['observed'])
 
-    def test_bsr_and_choice_together_make_asin_invalid(self):
+    def test_bsr_and_choice_are_independent_existence_checks(self):
         checks = inspect_frontend(
             '<div id="prodDetails" data-csa-c-asin="B000000001"><table class="prodDetTable"><tr>'
             '<th class="prodDetSectionEntry">Best Sellers Rank</th><td>#1 in Patio</td>'
@@ -87,10 +88,44 @@ class FrontendChecksTest(unittest.TestCase):
             '<div id="acBadge_feature_div" data-csa-c-asin="B000000001">'
             '<span class="mvt-ac-badge-rectangle">Amazon\'s Choice</span></div>',
             '8x10', 'B000000001', page_url='https://www.amazon.com/dp/B000000001')
-        self.assertEqual(checks['bsr_badge']['status'], 'fail')
+        # BSR and Amazon's Choice are separate existence-only indicators.  A
+        # saved/live DOM can expose both at once while the page is still
+        # correctly bound to the requested product; neither check invalidates
+        # the other.
+        self.assertEqual(checks['bsr_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+
+    def test_recommendation_choice_is_not_current_product_evidence(self):
+        checks = inspect_frontend(
+            '<div id="title_feature_div" data-csa-c-asin="B000000001"></div>'
+            '<div class="a-carousel-card recommend">'
+            '<div id="acBadge_feature_div" data-csa-c-asin="B000000001">'
+            '<span class="mvt-ac-badge-rectangle">Amazon\'s Choice</span></div></div>',
+            '8x10', 'B000000001', page_url='https://www.amazon.com/dp/B000000001')
         self.assertEqual(checks['amazon_choice_badge']['status'], 'fail')
-        self.assertIn('ASIN不合法', checks['bsr_badge']['reason'])
-        self.assertIn('ASIN不合法', checks['amazon_choice_badge']['reason'])
+
+    def test_b0dqtffrcn_hydrated_choice_is_scoped_to_current_product(self):
+        # The archived B0DQTFFRCN snapshot contains the current product's
+        # bound AC container, but the client-rendered badge text is absent from
+        # the serialized HTML. Hydrate that exact container in memory to keep
+        # this regression test offline while matching the live DOM evidence.
+        path = (Path(__file__).resolve().parents[1] / 'htmls' / '2026-08-25'
+                / '20260825_101629' / '004_PD25' / '00013_B0DQTFFRCN.html')
+        if not path.exists():
+            self.skipTest('historical B0DQTFFRCN fixture is not present')
+        html = path.read_text(encoding='utf-8', errors='ignore')
+        html, replaced = re.subn(
+            r'(<div id="acBadge_feature_div"[^>]*'
+            r'data-csa-c-asin="B0DQTFFRCN"[^>]*>)\s*</div>',
+            r"\1<span class=\"mvt-ac-badge-rectangle\">Amazon's Choice</span></div>",
+            html, count=1)
+        self.assertEqual(replaced, 1)
+        checks = inspect_frontend(
+            html, '9x12', 'B0DQTFFRCN',
+            page_url='https://www.amazon.com/dp/B0DQTFFRCN?th=1')
+        self.assertEqual(checks['bsr_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['observed'], "Amazon's Choice")
 
     def test_choice_passes_when_bsr_is_absent(self):
         checks = inspect_frontend(

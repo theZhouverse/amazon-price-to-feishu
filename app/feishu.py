@@ -814,6 +814,59 @@ class FeishuClient:
             sheet_id = matches[0]
         return sheet_id
 
+    def update_sheet(self, spreadsheet: str, sheet_id: str, *,
+                     title: str | None = None, index: int | None = None,
+                     hidden: bool | None = None) -> dict:
+        """Update a sheet's metadata using the official batch-update route.
+
+        Only explicitly supplied properties are sent.  In particular, moving
+        a sheet preserves its title and all cell contents.
+        """
+        properties = {'sheetId': str(sheet_id)}
+        if title is not None:
+            properties['title'] = str(title)
+        if index is not None:
+            properties['index'] = int(index)
+        if hidden is not None:
+            properties['hidden'] = bool(hidden)
+        if len(properties) == 1:
+            raise ValueError('update_sheet 至少需要 title、index 或 hidden')
+        body = {'requests': [{'updateSheet': {'properties': properties}}]}
+        r = self._client.post(
+            f'/sheets/v2/spreadsheets/{spreadsheet}/sheets_batch_update',
+            json=body, headers=self._headers())
+        r.raise_for_status()
+        d = r.json()
+        if d.get('code') != 0:
+            raise RuntimeError(f'更新子表属性失败: {d.get("msg")}')
+        return d
+
+    def delete_sheet(self, spreadsheet: str, sheet_id: str) -> dict:
+        """Delete one explicitly identified sheet; callers must preflight it."""
+        body = {'requests': [{'deleteSheet': {'sheetId': str(sheet_id)}}]}
+        r = self._client.post(
+            f'/sheets/v2/spreadsheets/{spreadsheet}/sheets_batch_update',
+            json=body, headers=self._headers())
+        r.raise_for_status()
+        d = r.json()
+        if d.get('code') != 0:
+            raise RuntimeError(f'删除子表失败: {d.get("msg")}')
+        return d
+
+    def move_sheet_to_end(self, spreadsheet: str, sheet_id: str) -> dict:
+        """Keep a registered sheet at the end without changing its identity."""
+        sheets = self.query_sheets(spreadsheet)
+        target = next((item for item in sheets
+                       if str(item.get('sheet_id') or '') == str(sheet_id)), None)
+        if target is None:
+            raise RuntimeError(f'目标子表不存在，无法移到末尾: {sheet_id}')
+        last_index = max((int(item.get('index') or 0) for item in sheets), default=0)
+        current_index = int(target.get('index') or 0)
+        if current_index == last_index:
+            return {'moved': False, 'index': current_index}
+        self.update_sheet(spreadsheet, sheet_id, index=last_index)
+        return {'moved': True, 'index': last_index}
+
     def inspect_weekly_registry(self, registry_url: str,
                                 configured_sheet_id: str = '') -> dict:
         """只读解析固定登记表并返回唯一登记 Sheet 的记录。"""

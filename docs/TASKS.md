@@ -1,5 +1,18 @@
 # TASKS: Amazon Daily
 
+## 2026-09-10 测试表字段、Feedback顺序与前端标志规则更新（最新）
+
+- [x] 仅在用户指定的隔离测试表 [GA6PsnlcjhTGsqtBocdcVct7n2e](https://wit0jhu6kvu.feishu.cn/sheets/GA6PsnlcjhTGsqtBocdcVct7n2e?sheet=JMa2c) 执行云端结构调整；固定生产结果表 `Epads8MQkhkuBctjl3lcqLUvnCg` 未读取写入、未改名、未删除子表。
+- [x] 测试表18个业务子表（PD/XD/CPD/PDF）逐表读取 `A2:V2` 并确认22列表头已完全匹配当前 `RESULT_HEADERS`：L=`价格一致性`、N=`商品主图`、O=`品牌故事`、Q=`BSR`、R=`父ASIN发散`、S=`环保标`、T=`AC标`；不存在HTML列。
+- [x] 对测试表完全空白的 `Sheet1`（原ID `b82298`）执行整表空值预检后删除；未发现名为 `Feedback????` 的遗留子表，因此没有扩大删除范围。
+- [x] 测试表新增固定9列表头的 `Feedback差评汇总`（Sheet ID `49WYs8`），位置读回为最后一个子表（index 18）；本次没有伪造反馈业务行，等待后续正式Feedback任务写入。
+- [x] 代码将 `store_a`/`store_b` 保留为内部采集键，Feedback可见“店铺”列改由配置显示名输出：`冬豚`、`北蓉`；幂等键仍稳定，重复运行不会因显示名转换产生重复行。
+- [x] 发布器兼容旧结果：若历史9列表中仍残留可见值 `store_a`/`store_b`，写入前在内存中转换为配置显示名并重建同一幂等键，避免升级后的首次运行重复追加；内部键不泄漏到可见列。
+- [x] 前端规则版本从 `2026-09-10-v11` 升至 `2026-09-10-v12`。BSR只接受当前请求ASIN绑定的商品详情表；AC只接受当前ASIN绑定、可见且文本精确为 `Amazon's Choice` 的商品badge，并排除推荐/隐藏节点；BSR与AC改为相互独立的存在性检查，不再因同一DOM同时出现两者把ASIN判为非法。
+- [x] 离线回归：完整 `unittest` 套件共 `334` 项通过（退出码0）；新增推荐卡AC排除、B0DQTFFRCN当前商品AC回放、旧店铺占位名迁移和真实显示店铺名/幂等回读覆盖，规则变更前后均无失败。
+
+云端核验记录：18/18业务表 `header_ok=true`；Feedback `A1:I1`严格9列、`index=18`；剩余子表标题共19个，顺序末尾为 `Feedback差评汇总`。本节为测试表结构变更证据，不代表已运行一次新的全量价格或Feedback采集。
+
 ## 2026-09-10 生产全量运行与 Feedback 首次发布（最新状态）
 
 - [x] 生产工作区与 GitHub `origin/fix-codescan-20260826` 保持同分支同步（运行时合并基线 `ffcd6ea`）；运行前仅在生产配置开启 `feedback.enabled`，未复制或提交 Secret。
@@ -82,7 +95,7 @@
 - [x] 在开发副本完成商品结果表N:T七个固定前端列、U/V时间戳和Amazon链接的本地布局模型；前端列显示`✅`/`❌`/`-`，bundle保留原始状态。旧A:P/A:O迁移、写前备份、写后整行回读和尾行清理属于后端/发布分支，不在本分支执行真实云端写入。
 - [x] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
 - [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
-- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`，同一ASIN同时存在时两列均为`fail`并记录ASIN不合法。
+- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice只做当前商品页面存在性判断，不读取周报预期或上一批值。BSR与Amazon's Choice分别按当前商品容器输出`pass`/`fail`；同一ASIN同时出现时保持两项独立（本条早期v11互斥描述已由最新v12规则替代）。
 - [ ] F1：为两个店铺分别登记Seller Central【反馈管理器】URL、非敏感店铺标识、凭证引用和目标上下文；只允许从【最新反馈】区域读取，禁止接入商品Review、Q&A或前台评论。两个店铺必须使用独立会话并串行处理，不得混用页面、分页游标、订单详情或下载状态。
 - [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
 - [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。
@@ -110,7 +123,7 @@
 - [x] 2026-09-08 开发副本实测当前登记序号4：只读发现新快照19个子表、18个业务映射（US=11、CA=7），排除`BI源数据`；ASIN/商品链接审计有效720、无效0、辅助标签跳过294。随后创建独立快照副本（Token仅在日志中脱敏保存），原周报未写入。
 - [x] 前端单条实测：US `B0C5R56QTF` 使用新快照完成`amazon.com`/USD/90210/ASIN一致性门禁，尺寸`2.5x8`与页面`2.5' x 8'`匹配；首次样本暴露导航/语言误报后，收紧全局容器、尺寸结构和单位比较并升级前端规则`2026-09-08-v2`。CA首条`B0D9NT9JQN`保留真实`identity_mismatch`，N:T显示`-`且bundle为`unknown`，未绕过重试、未写飞书。
 - [x] 修正`--limit`按有效/无效源行合并后的原表行号截取，避免`source_data_invalid`记录使前端样本超出限制；以上真实样本均为dry-run，仅保存本地bundle/CSV/缓存证据。
-- [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，`From the brand`品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列均判定`fail`并记录ASIN不合法；尺寸规则补充`8'X10'`与`8 x 10 ft`的共享单位等价比较并忽略`Rectangular`后缀，规则版本升级为`2026-09-10-v11`。
+- [x] 读取历史离线HTML并收紧前端选择器：主图使用`#imageBlock_feature_div`/`#landingImage`，品牌故事使用`#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`且强制精确标题与同模块图片，尺寸优先使用`#inline-twister-expander-header-*`，先校验`#title_feature_div[data-csa-c-asin]`/`#ASIN[value]`或页面URL ASIN页面主商品身份，身份锚点全部缺失时七项均为`unknown`，BSR使用当前ASIN绑定的`prodDetails`详情表并允许折叠表格、排除推荐轮播，父子ASIN使用`#inline-twister-expander-content-*`下的`li.inline-twister-swatch[data-asin]`，环保使用同一当前商品卡片且要求 ATF 模块显式存在并匹配`data-csa-c-asin`的叶子图标与`1 sustainability feature`文本，AC使用当前ASIN绑定的可见实际badge而不是隐藏说明弹窗；同一ASIN同时存在BSR和AC时两列按v12独立判定；尺寸规则补充`8'X10'`与`8 x 10 ft`的共享单位等价比较并忽略`Rectangular`后缀，早期规则版本为`2026-09-10-v11`。
 - [x] 2026-09-10 尺寸判定修复：发现旧 bundle 的 `expected` 仍是未求值的`BI源数据`公式文本，且旧规则无法把`2.5'X8'`与页面`2'6\" x 8'`识别为同一尺寸；新增公式源值解析、共享尾部单位等价和英尺小数/英尺加英寸换算。18个隔离业务子表只重算P列并逐表回读：719个商品行中`✅` 481、`❌` 0、`-` 238；没有改价格、SKU、尺寸C列或其他风控列。规则版本为`2026-09-10-v11`。
 - [x] 用历史离线HTML完成各站点/布局的选择器覆盖清单和前端反例回归；离线样本只用于规则验证，不能替代当次实时页面结果。紫鸟/ZClaw实时US/CA采集由后端/发布分支负责，不作为本分支前端完成条件。
 - [x] 依据业务反馈调整可见列：前端七列改为`✅`/`❌`/`-`，详细`pass/fail/unknown/not_applicable`仅保留在bundle；时间戳和Amazon链接移动到U/V最后两列，并同步旧A:P/A:O迁移逻辑。

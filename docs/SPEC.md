@@ -1,6 +1,6 @@
 # SPEC：Amazon 周报前端价格捕捉任务
 
-> 当前规格，更新于2026-09-09。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
+> 当前规格，更新于2026-09-10。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
 >
 > 旧版已完整保存到[历史目录](history/README.md)，其中“每周新建结果表”“HTML门禁”“仅下午执行”“8月31日截止”不再是当前规则。
 
@@ -184,19 +184,19 @@ amazon_daily_structured_20260821/
 | I | 折扣类型 | 页面证据决定的四类优惠之一 |
 | J | 折扣值 | 百分比或金额，按第6节类型解释 |
 | K | 最终价格 | 根据展示价格及有效优惠计算 |
-| L | 一致性检查 | 最终价格与目标成交价的比较 |
+| L | 价格一致性 | 最终价格与目标成交价的比较 |
 | M | 币种 | US为USD、CA为CAD |
-| N | 商品主图是否存在 | 当前商品主图区域存在有效图片来源时写`✅`；明确缺失写`❌`。只判断主图是否存在，不把品牌故事图片混入本列 |
-| O | From the brand品牌故事图片是否存在 | 当前商品的A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块必须同时出现精确标题`From the brand`和该模块内有效图片时写`✅`；模块为空、标题缺失或图片缺失写`❌`。本列与N列独立，便于看出是哪一项缺失 |
+| N | 商品主图 | 当前商品主图区域存在有效图片来源时写`✅`；明确缺失写`❌`。只判断主图是否存在，不把品牌故事图片混入本列 |
+| O | 品牌故事 | 当前商品的A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块必须同时出现精确标题`From the brand`和该模块内有效图片时写`✅`；模块为空、标题缺失或图片缺失写`❌`。本列与N列独立，便于看出是哪一项缺失 |
 | P | 前端尺寸是否一致 | 页面当前选中商品尺寸与当批周报预期尺寸规范化后相同时写`✅`，不一致写`❌` |
-| Q | BSR标志是否存在 | 当前ASIN所属的`#prodDetails`/`#productDetails_feature_div`详情表存在`Best Sellers Rank`字段、且当前ASIN没有同时出现AC时写`✅`；当前ASIN详情表明确没有，或BSR与AC同时出现导致ASIN不合法时写`❌`；允许读取当前商品折叠详情表，但不读取导航、推荐或其他ASIN区域 |
-| R | 父子ASIN发散检查 | 页面正常且明确列出至少一个子体/变体ASIN时写`✅`；页面正常但没有任何子体/变体时写`❌` |
-| S | 环保标志是否存在 | 当前商品存在完整商品级 Climate Pledge Friendly 标志链时写`✅`；仅有空占位、品牌可持续文案或不完整容器时写`❌` |
-| T | Amazon's Choice标志是否存在 | 当前ASIN对应的`#acBadge_feature_div`内存在可见实际badge节点、节点文本精确为Amazon's Choice且当前ASIN没有同时出现BSR时写`✅`；隐藏说明弹窗、空占位、ASIN不一致、不存在或与BSR同时出现导致ASIN不合法时写`❌` |
+| Q | BSR | 只在当前请求ASIN绑定的商品详情表中查找`Best Sellers Rank`字段；排除导航、推荐、赞助和其他ASIN区域。找到当前商品字段写`✅`，明确没有写`❌`；不与AC结果互相否定 |
+| R | 父ASIN发散 | 页面正常且明确列出至少一个不同的子体/变体ASIN时写`✅`；当前ASIN页面没有任何子体时写`❌` |
+| S | 环保标 | 当前商品存在完整商品级 Climate Pledge Friendly 标志链时写`✅`；仅有空占位、品牌可持续文案或不完整容器时写`❌` |
+| T | AC标 | 只在当前请求ASIN绑定的可见`#acBadge_feature_div`商品模块中查找文本精确为`Amazon's Choice`的实际badge；排除隐藏说明、推荐卡和其他ASIN区域。存在写`✅`，明确为空或不存在写`❌`；不与BSR结果互相否定 |
 | U | 时间戳 | 本条抓取/计算时间；不是表名更新时间 |
 | V | Amazon链接 | 本商品标准URL |
 
-检查列的内部状态仍统一为`pass`、`fail`、`unknown`、`not_applicable`，但结果表只显示`✅`、`❌`或`-`：`pass`显示`✅`，`fail`显示`❌`，`unknown`和`not_applicable`显示`-`。这样表格便于业务查看，同时不把“证据不足/不适用”伪装成失败；bundle和本地诊断保留原始状态、观察值、原因和定位。N列主图与O列`From the brand`品牌故事图片独立输出。BSR与Amazon's Choice先分别提取，但业务规则要求同一当前ASIN不能同时存在两者；若两者同时存在，判定该ASIN不合法，Q和T均为`fail`并在原因中保留该冲突。Page Not Found、身份不一致、导航失败、币种错误等整页门禁发生时，N:T全部显示`-`并在bundle中保留`unknown`，价格列仍按第17节阻断规则处理。检查证据写入bundle和本地诊断，至少包含检查名、观察值、状态、原因、页面ASIN/URL、抓取时间和规则版本。
+检查列的内部状态仍统一为`pass`、`fail`、`unknown`、`not_applicable`，但结果表只显示`✅`、`❌`或`-`：`pass`显示`✅`，`fail`显示`❌`，`unknown`和`not_applicable`显示`-`。这样表格便于业务查看，同时不把“证据不足/不适用”伪装成失败；bundle和本地诊断保留原始状态、观察值、原因和定位。N列主图与O列品牌故事独立输出；Q列BSR和T列AC标分别按当前ASIN作用域做存在性判断，不能因为两者同时出现在同一份DOM就互相否定。Page Not Found、身份不一致、导航失败、币种错误等整页门禁发生时，N:T全部显示`-`并在bundle中保留`unknown`，价格列仍按第17节阻断规则处理。检查证据写入bundle和本地诊断，至少包含检查名、观察值、状态、原因、页面ASIN/URL、抓取时间和规则版本。
 
 旧系统A:P中M为时间戳、N为HTML、O为币种、P为Amazon链接；旧A:O中M为时间戳、N为币种、O为Amazon链接。识别完全匹配的旧表头或当前A:V表头后才允许备份发布。迁移到新布局时，旧币种映射到当前M，旧时间戳映射到当前U，旧Amazon链接映射到当前V，旧HTML只备份并清理，N:T初始化为空，不得把旧HTML值当作新检查结果。新布局写入完整A:V，物理尾列不因迁移删除；未知表头不得覆盖。每批同样重新组合A:G，不能沿用旧目标价、旧SKU或旧检查结果。
 
@@ -206,11 +206,13 @@ ReportRow记录源行、ASIN、基础字段、目标价来源和前端检查预�
 
 固定结果Spreadsheet增加一个独立的Feedback子表，固定名称为`Feedback差评汇总`；首次建立或识别时必须把Sheet ID写入固定资源登记和本批manifest，后续只复用该Sheet ID，不按同名猜测或每次新建。该子表不参与A:V商品行的行数、价格技术异常率或ASIN集合门禁。
 
+`Feedback差评汇总`必须保持在结果Spreadsheet子表列表的最后位置；空白遗留子表以及标题为`Feedback????`且经整表空值预检确认无数据的子表可以删除，含数据或身份不明确的子表不得自动删除。Feedback表只在首次登记时创建，后续移动位置不得改变Sheet ID、内容或权限。
+
 `Feedback差评汇总`的可见表头固定为以下9列，列顺序不可变：
 
 | 列 | 字段 | 来源 |
 |---|---|---|
-| A | 店铺 | 当前Seller Central后台会话对应的配置店铺，不从页面自由猜测 |
+| A | 店铺 | 当前Seller Central后台会话对应的配置店铺的真实显示名称（当前配置为“冬豚”“北蓉”）；内部`store_a`/`store_b`仅用于采集路由、排序和审计，不得写入可见表格 |
 | B | 日期 | 【反馈管理器】→【最新反馈】中的反馈日期；按`Asia/Shanghai`解释窗口，不擅自改写源日期 |
 | C | 评级 | 【最新反馈】中的星级，仅保留1、2、3星；缺失或无法解析的评级不默认当作合格 |
 | D | 订单编号 | 【最新反馈】中的订单编号，并在二级详情前后校验身份 |
@@ -263,16 +265,16 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 总体生产链路中的前端检查和价格解析使用同一次商品页面导航、同一ASIN身份门禁和同一邮编/站点上下文。检查不得通过另一次无预算导航绕过价格任务的节奏与风控限制；检查脚本只读取已加载页面及其可见DOM/结构化数据。历史本地HTML可先用于构造离线样本和选择器匹配，生产结果必须来自当次实时页面。当前开发分支只验收前端检查函数和快照证据，不负责启动紫鸟/ZClaw或完成生产实时采集。检查结果不覆盖H:M价格/币种字段，也不把检查失败重新分类为价格成功。
 
 - 商品主图：当前商品主图区域（优先`#imageBlock_feature_div`及其`#landingImage`/主图节点）须存在有效图片来源，并且该图片节点能在当前商品DOM中确认、未被隐藏/推荐/其他商品上下文门禁排除。规则不把图片CSS宽高作为独立通过条件；明确缺失为`fail`，页面不可用或身份门禁失败为`unknown`。该项只判断主图存在，不判断图片内容是否与周报一致。
-- From the brand品牌故事图片：只接受当前商品A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块；该模块必须有精确的标题`From the brand`，并且同一模块内至少有一个有效图片项。模块为空、只出现泛化品牌文案、标题缺失或图片缺失均为`fail`；页面不可用或身份门禁失败为`unknown`。观察值必须分别记录`heading`和`image`，不再与N列主图合并。
+- 品牌故事：只接受当前商品A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块；该模块必须有精确的标题`From the brand`，并且同一模块内至少有一个有效图片项。模块为空、只出现泛化品牌文案、标题缺失或图片缺失均为`fail`；页面不可用或身份门禁失败为`unknown`。观察值必须分别记录`heading`和`image`，不再与N列主图合并。
 - 尺寸一致性：读取当前选中变体或购买区展示尺寸，统一大小写、空格、乘号、单位和英制/公制书写后与周报预期尺寸比较；同一单位写在两个数字后（`8' x 10'`）或只写在末尾（`8 x 10 ft`）视为等价，英尺小数与英尺加英寸（`2.5'`与`2'6\"`）按英寸换算后比较，混合单位仍严格比较。页面尺寸后的`Rectangular`等非数值说明不参与比较。只有存在明确预期值且页面明确选中同一变体才可`pass`；缺少预期、未选中变体或多个尺寸无法确定时为`unknown`。
 - 页面商品身份：在单项字段检查前，优先读取主商品`#title_feature_div[data-csa-c-asin]`，旧布局再回退到`#ASIN[value]`，并读取页面URL中的ASIN；至少必须存在一个可验证的当前商品身份锚点。若页面主商品ASIN或页面URL中的ASIN与请求ASIN不一致，或者两类身份锚点均缺失，N:T全部为`unknown`并显示`-`，不得从页面中其他商品模块拼接部分结果。
 - BSR：读取当前商品详情表的`th.prodDetSectionEntry`字段，字段文本规范化后必须精确等于`Best Sellers Rank`，祖先必须属于`#prodDetails`、`#productDetails_feature_div`或`.prodDetTable`，并且同一详情表的`ASIN`行必须等于当前请求ASIN；没有ASIN行时才允许使用该详情链上的`data-csa-c-asin`/`data-asin`作为回退。Amazon页面常把该详情表放在折叠的`.a-expander-content`中；只要该字段属于当前ASIN详情表，就计为存在，不把“折叠”误判为缺失。导航中的`Best Sellers`、推荐/广告/轮播或其他ASIN区域的文字不计入。该项只判断字段存在，不读取实时排名数值。
 - Amazon's Choice：只检查当前ASIN对应的`#acBadge_feature_div`，该容器或其祖先的`data-csa-c-asin`/`data-asin`必须包含当前请求ASIN，并且其可见后代节点必须有规范化后精确等于`Amazon's Choice`的实际badge文本。`a-popover-preload`、`aria-hidden=true`、`aok-hidden`、`aok-offscreen`及其他隐藏说明文本不计入；空占位容器、ASIN不一致的变体、导航、推荐商品或其他ASIN区域不计入。
-- BSR与Amazon's Choice的“唯一性”首先要求各自只能归属于当前ASIN；另外业务上二者互斥：同一当前ASIN同时存在BSR和AC时，判定该ASIN不合法，`bsr_badge`和`amazon_choice_badge`均输出`fail`，保留各自的观察值和冲突原因，不得输出两个`pass`。页面身份门禁失败时七项统一为`unknown`并显示`-`。
+- BSR与Amazon's Choice的“唯一性”只要求各自归属于当前ASIN；两项是独立的存在性检查，不能因为同一份DOM同时出现两者就把ASIN判为不合法或互相改写为`fail`。页面身份门禁失败时七项统一为`unknown`并显示`-`。
 - 父子ASIN发散：只读取`#inline-twister-expander-content-*`变体区域下面的`li.inline-twister-swatch[data-asin]`，从这些子体节点提取ASIN并排除当前请求ASIN。至少还有一个不同ASIN为`pass`；变体区域存在但没有不同ASIN为`fail`；变体区域无法确认时为`unknown`。`#twisterPlusPriceSubtotalWWDesktop_feature_div`只属于价格汇总，不再作为父子ASIN证据。
-- 环保标志：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`必须存在非空的`data-csa-c-asin`且其值必须与当前页面ASIN一致；缺失或不一致均不得通过。该模块后代还必须同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
+- 环保标：只读取当前商品完整的 Climate Pledge Friendly 商品级标志链：`#climatePledgeFriendlyATF_feature_div`必须存在非空的`data-csa-c-asin`且其值必须与当前页面ASIN一致；缺失或不一致均不得通过。该模块后代还必须同时存在`#climatePledgeFriendlyBadge`、`#CPF-ATF-Card`、`.climatePledgeFriendlyATF`触发器、`.climatePledgeFriendlyProgramName`非空文本和有效叶子图标图片；叶子图片和文本必须落在同一个当前商品的`#CPF-ATF-Card`内。推荐/广告/轮播卡片、空的 ATF/BTF/A+ Sustainability 占位模块、品牌描述中的可持续文案、页脚推广链接及单独的`eco`词不计入。明确缺失为`fail`，页面身份或证据不足为`unknown`，不与周报字段比较。
 
-所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将主图与`From the brand`品牌故事图片拆为N/O两列，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点，规则版本升级为`2026-09-10-v11`，新增共享尾部单位和英尺小数/英尺加英寸的尺寸等价换算，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
+所有检查均保留`observed`、`status`、`reason`、`evidence_locator`、页面URL和同一次DOM快照的`captured_at`；只有尺寸检查额外保留`expected`。检查规则、解析选择器或标志识别方式变化时递增独立的`frontend_check_rule_version`；本轮将可见列改为N商品主图、O品牌故事、Q BSR、R父ASIN发散、S环保标、T AC标，要求品牌故事模块精确标题+同模块图片，要求环保模块显式绑定当前ASIN，并要求至少存在一个当前商品身份锚点；BSR和AC均采用当前商品作用域内的独立存在性规则，规则版本升级为`2026-09-10-v12`，旧bundle不能在新规则下被重新解释为新检查结果。BSR、环保和Amazon's Choice不读取周报预期，也不从上一周或上一批复制。
 
 ### 6.2 后台Feedback来源和筛选
 

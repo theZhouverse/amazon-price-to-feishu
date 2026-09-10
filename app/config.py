@@ -69,7 +69,7 @@ DEFAULTS = {
     'feishu_output_start_col': 8,     # 紧凑目标表 H 列(1-based)
     'feishu_header_row': 2,           # 目标表表头固定第 2 行
     'feishu_output_headers': [
-        '展示价格', '折扣类型', '折扣值', '最终价格', '一致性检查', '时间戳',
+        '展示价格', '折扣类型', '折扣值', '最终价格', '价格一致性', '时间戳',
     ],
     # Seller Central Feedback；默认关闭，未登记真实后台会话和固定子表前不得启用
     'feedback': {
@@ -331,11 +331,13 @@ def validate(cfg: dict) -> None:
         if len(feedback['stores']) != 2:
             raise RuntimeError('启用Feedback时必须登记两个店铺')
         store_keys = []
+        display_names = []
         for item in feedback['stores']:
             if not isinstance(item, dict):
                 raise RuntimeError('feedback.stores 每项必须是对象')
             store_keys.append(str(item.get('key') or '').strip())
-            for key in ('key', 'store_id', 'expected_store_identity',
+            display_names.append(str(item.get('display_name') or '').strip())
+            for key in ('key', 'display_name', 'store_id', 'expected_store_identity',
                         'feedback_manager_url', 'secret_ref'):
                 if not str(item.get(key) or '').strip():
                     raise RuntimeError(f'启用Feedback时 feedback.stores.{key} 不能为空')
@@ -343,6 +345,8 @@ def validate(cfg: dict) -> None:
                 raise RuntimeError('启用Feedback时 feedback.stores.selectors 必须是对象')
         if set(store_keys) != set(str(item) for item in feedback['store_order']):
             raise RuntimeError('feedback.stores.key 必须与 feedback.store_order 一一对应')
+        if len(set(display_names)) != len(display_names):
+            raise RuntimeError('启用Feedback时 feedback.stores.display_name 不能重复')
         if not str(feedback.get('target_spreadsheet_token') or '').strip():
             raise RuntimeError('启用Feedback时 target_spreadsheet_token 不能为空')
         if not str(feedback.get('target_sheet_id') or '').strip():

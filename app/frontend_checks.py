@@ -16,7 +16,7 @@ from decimal import Decimal
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v11'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v12'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -37,13 +37,13 @@ CHECK_KEYS = (
     'amazon_choice_badge',
 )
 FRONTEND_HEADERS = (
-    '商品主图是否存在',
-    'From the brand品牌故事图片是否存在',
+    '商品主图',
+    '品牌故事',
     '前端尺寸是否一致',
-    'BSR标志是否存在',
-    '父子ASIN发散检查',
-    '环保标志是否存在',
-    "Amazon's Choice标志是否存在",
+    'BSR',
+    '父ASIN发散',
+    '环保标',
+    'AC标',
 )
 
 _GATE_STATUSES = {
@@ -558,7 +558,10 @@ def _product_choice(nodes: list, asin: str = '') -> tuple[bool, str, str]:
     choice_re = re.compile(r"^amazon['’]?s\s*choice$", re.I)
     for root in nodes:
         ident = str(getattr(root, 'attrs', {}).get('id') or '').lower()
-        if ident != 'acbadge_feature_div' or not _belongs_to_asin(root, asin):
+        if (ident != 'acbadge_feature_div'
+                or _in_non_product_context(root)
+                or _hidden_evidence(root)
+                or not _belongs_to_asin(root, asin)):
             continue
         for node in _walk_descendants(root):
             if _hidden_evidence(node):
@@ -726,13 +729,6 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     choice_status = 'pass' if choice else 'fail'
     choice_reason = ("当前商品存在Amazon's Choice实际badge" if choice
                      else "当前商品的Amazon's Choice容器为空或不存在")
-    if bsr and choice:
-        invalid_reason = (
-            f'同一 ASIN {requested_asin or str(asin or "").upper()} 同时存在 '
-            "BSR 和 Amazon's Choice，ASIN不合法")
-        bsr_status = choice_status = 'fail'
-        bsr_reason = choice_reason = invalid_reason
-
     size_result = _result(
         'size_consistent', observed or '', size_status, size_reason, size_locator, page_url)
     size_result['expected'] = expected
