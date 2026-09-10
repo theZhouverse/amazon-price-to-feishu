@@ -120,6 +120,111 @@ class TestSnapshotCopy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '缺少 spreadsheet_token'):
             client.create_spreadsheet('TEST')
 
+    def test_create_spreadsheet_auto_grants_and_verifies_manager(self):
+        client = self.make_client()
+        client.cfg.update({
+            'feishu_auto_grant_generated_resources': True,
+            'feishu_manager_open_id': 'ou_manager',
+        })
+        created = Mock(status_code=200)
+        created.json.return_value = {
+            'code': 0,
+            'data': {'spreadsheet': {
+                'spreadsheet_token': 'new-book', 'url': 'https://example/book',
+            }},
+        }
+        permission_post = Mock(status_code=200)
+        permission_post.json.return_value = {'code': 0, 'data': {}}
+        before = Mock(status_code=200)
+        before.json.return_value = {'code': 0, 'data': {'items': []}}
+        after = Mock(status_code=200)
+        after.json.return_value = {'code': 0, 'data': {'items': [{
+            'member_id': 'ou_manager', 'member_type': 'openid',
+            'perm': 'full_access',
+        }]}}
+        client._client.post.side_effect = [created, permission_post]
+        client._client.get.side_effect = [before, after]
+
+        got = client.create_spreadsheet('TEST')
+
+        self.assertEqual(got['spreadsheet_token'], 'new-book')
+        self.assertEqual(got['generated_resource_access']['member_id'], 'ou_manager')
+        self.assertTrue(got['generated_resource_access']['verified'])
+        self.assertEqual(client._client.get.call_count, 2)
+
+    def test_create_spreadsheet_rejects_missing_permission_readback(self):
+        client = self.make_client()
+        client.cfg.update({
+            'feishu_auto_grant_generated_resources': True,
+            'feishu_manager_open_id': 'ou_manager',
+        })
+        created = Mock(status_code=200)
+        created.json.return_value = {
+            'code': 0,
+            'data': {'spreadsheet': {'spreadsheet_token': 'new-book'}},
+        }
+        permission_post = Mock(status_code=200)
+        permission_post.json.return_value = {'code': 0, 'data': {}}
+        empty = Mock(status_code=200)
+        empty.json.return_value = {'code': 0, 'data': {'items': []}}
+        client._client.post.side_effect = [created, permission_post]
+        client._client.get.side_effect = [empty, empty]
+
+        with self.assertRaisesRegex(RuntimeError, '回读不到目标成员'):
+            client.create_spreadsheet('TEST')
+
+    def test_existing_manager_permission_is_upgraded_and_verified(self):
+        client = self.make_client()
+        before = Mock(status_code=200)
+        before.json.return_value = {'code': 0, 'data': {'items': [{
+            'member_id': 'ou_manager', 'member_type': 'openid', 'perm': 'edit',
+        }]}}
+        after = Mock(status_code=200)
+        after.json.return_value = {'code': 0, 'data': {'items': [{
+            'member_id': 'ou_manager', 'member_type': 'openid',
+            'perm': 'full_access',
+        }]}}
+        updated = Mock(status_code=200)
+        updated.json.return_value = {'code': 0, 'data': {}}
+        client._client.get.side_effect = [before, after]
+        client._client.put.return_value = updated
+
+        got = client.ensure_permission_member(
+            'book', 'sheet', 'ou_manager', perm='full_access')
+
+        self.assertTrue(got['updated'])
+        self.assertTrue(got['verified'])
+        client._client.put.assert_called_once_with(
+            '/drive/v1/permissions/book/members/ou_manager',
+            params={'type': 'sheet', 'member_type': 'openid',
+                    'need_notification': 'true'},
+            json={'member_type': 'openid', 'perm': 'full_access'},
+            headers={'Authorization': 'Bearer token'})
+
+    def test_copy_file_auto_grants_recovered_resource(self):
+        client = self.make_client()
+        client.cfg.update({
+            'feishu_auto_grant_generated_resources': True,
+            'feishu_manager_open_id': 'ou_manager',
+        })
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            'code': 0,
+            'data': {'file': {'token': 'copy-token', 'type': 'file'}},
+        }
+        access = {'enabled': True, 'member_id': 'ou_manager',
+                  'member_type': 'openid', 'perm': 'full_access',
+                  'verified': True}
+        client.ensure_permission_member = Mock(return_value=access)
+        client._client.post.return_value = response
+
+        got = client.copy_file('source-token', 'file', 'TEST')
+
+        self.assertEqual(got['token'], 'copy-token')
+        client.ensure_permission_member.assert_called_once_with(
+            'copy-token', 'file', 'ou_manager',
+            member_type='openid', perm='full_access')
+
     def test_add_sheet_returns_id(self):
         client = self.make_client()
         response = Mock()

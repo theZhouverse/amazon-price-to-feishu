@@ -45,7 +45,12 @@ DEFAULTS = {
     'html_server_enabled': False,
     'html_server_bind': '0.0.0.0',
     'html_server_port': 8765,
+    # 新建/复制任意飞书云端资源后，统一给配置的周成业授予管理权限；
+    # 权限写入后必须回读确认，历史资源不在此策略的自动扫描范围内。
+    'feishu_auto_grant_generated_resources': True,
     'feishu_manager_open_id': '',
+    'feishu_generated_resource_member_type': 'openid',
+    'feishu_generated_resource_perm': 'full_access',
     # 计算
     'price_tolerance': '0.50',        # 一致性容差(USD, Decimal 字符串)
     'ambiguous_price_ratio': '0.05',  # 多候选冲突阈值

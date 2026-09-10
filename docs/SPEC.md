@@ -90,6 +90,14 @@ Windows、Python 3.10+、Chromium/DrissionPage。Python依赖以 `config/require
 
 飞书应用需要读取登记表、Wiki和周报，复制原表、管理新快照协作者、读取及编辑固定结果表和必要时添加业务子表，以及查询应用协作者并发送消息。应用可用范围与文档访问权限是两件事，不自动扩大任一范围。
 
+### 2.1 飞书新资源统一授权规则（当前有效）
+
+- 本项目当前应用创建或复制出的所有新飞书云端资源，统一授予配置中的周成业 `openid/full_access`；在飞书界面对应“可管理/管理权限”。资源类型不限于 Spreadsheet，未来通过同一客户端创建的 Drive 文件或文件夹也必须在拿到 token 后调用同一授权入口。
+- 自动策略由 `feishu_auto_grant_generated_resources=true`、`feishu_manager_open_id`、`feishu_generated_resource_member_type=openid` 和 `feishu_generated_resource_perm=full_access` 共同控制。`open_id` 必须是当前应用维度，不能从其他应用或用户态 CLI 直接复用；当前配置已按本应用通讯录核验周成业身份。
+- `create_spreadsheet()` 和通用 `copy_file()` 在拿到新资源 token 后自动授权；`ensure_permission_member()` 会先读已有权限，必要时写入，再重新读取成员列表确认目标成员、成员类型和 `full_access` 均存在。只返回“写接口成功”但回读不到权限时，流程失败关闭，不把资源标记为 ready。
+- 子表、单元格、图片等内容继承其所属云端资源的文件级权限；添加 Sheet 或写入内容不另建第二套人员权限名单。未来新增资源创建/上传入口必须复用 `ensure_generated_resource_access()`，否则不得接入正式交付。
+- 该规则只负责本应用“创建/复制/上传后”的新资源，不自动扫描或批量修改历史资源。已有资源是否补授权必须单独给出明确资源范围、逐项回读和审计证据，不能由新资源规则推断已完成。
+
 新增的前端检查沿用商品详情页的同一浏览器会话和页面证据，不为每一项检查重复打开商品页。新增的后台Feedback采集使用两个店铺各自的Seller Central会话/凭证，和零售商品页会话分开；凭证只从运行时Secret注入，不写入快照、日志、bundle或Git。两个店铺必须串行处理，一个店铺的浏览器上下文、页面状态、分页游标和订单详情不能带入另一个店铺。单店铺失败只将Feedback子任务标记为partial/blocked，并在安全关闭当前店铺上下文后继续另一店铺；不回写价格行，也不把后台失败计入价格技术异常率。实现参考BDLD项目的慢速串行、随机等待和风险立即停机原则，但不复制其店铺身份、凭证或业务字段。
 
 ## 3. 配置与来源
