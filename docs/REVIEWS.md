@@ -1,5 +1,15 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-10 生产全量运行与 Feedback 固定子表回读（最新）
+
+- 本地工作区已与 GitHub `origin/fix-codescan-20260826` 同步到合并提交 `ffcd6ea`；本次仅将生产配置 `feedback.enabled` 从 `false` 改为 `true`，未复制或打印任何 Secret。
+- 使用隐藏窗口运行原入口 `app/main.py --weekly-run --confirm --scheduled-slot weekday_0730`，运行编号 `20260910_121408`，来源周期 `seq-4`，选择模式 `weekday_steady`。HTML 归档与局域网服务保持关闭，既有 `htmls` 历史文件未删除，也没有产生新 HTML 下载。
+- 18 个价格业务子表（US 11、CA 7）均完成实时抓取；页面状态为 `ok=489`、`identity_mismatch=196`、`source_data_invalid=29`、`parse_error=5`，前端七项累计 `pass=2285`、`fail=1136`、`unknown=1612`。固定结果 Spreadsheet 仍为 `Epads8MQkhkuBctjl3lcqLUvnCg`，基础 A:G 同步 719 行，H:V 实际写入 489 行，230 行因身份/源数据/解析门禁阻断；批次状态为 `partial`，未将阻断行伪装成成功。
+- CA 子表已实际执行并写入：币种统计 `USD=549`、`CAD=170`；`CPD03` 等代表表回读均为 A:V 22 列。CA 仍存在较高 `identity_mismatch`，后续应依据本批 bundle 的请求 ASIN/最终 ASIN 证据优化站点导航，不能只看写入总数判断 CA 已完全修复。
+- Feedback 独立阶段按两个 Seller Central 店铺串行执行，首次窗口 `2026-09-04` 至 `2026-09-10`（`initial_7d`），两店各读取 2 页、合计 80 条原始记录，评级 1–3 星窗口内 10 条，二级订单详情 10/10 完整；两店状态均为 `ok`，阶段耗时 390.344 秒。固定子表 `Feedback差评汇总`（Sheet ID `41u25y`）写入 10 条、范围 `A1:I11`，9 列写后回读通过，状态账本已推进；远端回读确认表头严格 9 列且 10 条非空业务行。空白遗留子表 `Feedback????`（`3lCGeQ`）未使用。
+- 任务完成后只发送一次协作者通知，8 人成功、0 人失败；通知回执位于 `outputs/daily_runs/2026-09-10/20260910_121408_notifications.json`。完整墙钟耗时为 5858.296 秒（约 97.64 分钟），结果表名称已同步为 `Amazon周报前端价格捕捉_2026-W37_20260910_121408`。
+- 本批可复核证据：`outputs/daily_runs/2026-09-10/20260910_121408_weekly_bundle.json`、`20260910_121408_weekly_summary.json`、`20260910_121408_delivery.json`、`20260910_121408_notifications.json`；Feedback 证据目录为 `outputs/feedback/20260910_121408/`。此前本文件中“Feedback 未启用/业务行 0”的记录是历史时间点证据，不能覆盖本节最新运行结果。
+
 ## 2026-09-09 Feedback桥接兼容与单店首次7日只读阻断（最新）
 
 - 已修复真实紫鸟 CLI 的 Windows `.cmd` 参数边界：页面 JavaScript 统一压成单行，中文 marker/分页/详情标签改为 ASCII 运行时字符构造；CLI 更新通知不再被误判为页面风险，评论内容和内部签名也不再参与登录/验证码/风控文本扫描。新增详情页/列表页有界渲染重试、分页上限前不再继续点击，以及订单详情返回后重新访问 Feedback Manager 并恢复原页码的策略。

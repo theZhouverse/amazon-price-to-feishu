@@ -1,5 +1,18 @@
 # TASKS: Amazon Daily
 
+## 2026-09-10 生产全量运行与 Feedback 首次发布（最新状态）
+
+- [x] 生产工作区与 GitHub `origin/fix-codescan-20260826` 同步到 `ffcd6ea`；运行前仅在生产配置开启 `feedback.enabled`，未复制或提交 Secret。
+- [x] 以隐藏窗口执行 `app/main.py --weekly-run --confirm --scheduled-slot weekday_0730`，运行 `20260910_121408`，周期 `seq-4`、模式 `weekday_steady`；价格 18 个子表均完成抓取，固定结果表基础 A:G 同步 719 行、H:V 写入 489 行、阻断 230 行，批次明确记为 `partial`。
+- [x] CA 7 个 CPD 子表已包含在同一批次并完成实时抓取，结果中保留 `CAD=170` 与身份门禁阻断证据；不得把 CA 阻断误报为成功。
+- [x] Feedback 两店串行首次 7 日窗口（`2026-09-04`～`2026-09-10`）完成：两店各 2 页、原始 80 条、评级 1–3 星窗口内 10 条、二级详情 10/10 完整、两店状态 `ok`，阶段耗时 390.344 秒。
+- [x] 固定结果 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 的 `Feedback差评汇总`（`41u25y`）写入 10 条，`A1:I11` 写后整表回读通过；状态账本已推进。空白 `Feedback????`（`3lCGeQ`）不使用。
+- [x] 统一通知一次性发送给 8 名应用协作者，成功 8、失败 0；完整墙钟耗时 5858.296 秒（约 97.64 分钟）。
+- [ ] 后续验收：在下一次工作日 07:30 运行确认 `incremental_3d` 窗口、10 日留存清理与重复合并；继续跟踪 CA `identity_mismatch`，必要时按 bundle 逐条优化导航，不放宽身份门禁。
+- [ ] HTML 归档/局域网服务仍按当前要求关闭；保留既有 `htmls` 历史文件，不在价格任务中重新下载 HTML。
+
+证据：`outputs/daily_runs/2026-09-10/20260910_121408_weekly_bundle.json`、`20260910_121408_weekly_summary.json`、`20260910_121408_delivery.json`、`20260910_121408_notifications.json`、`outputs/feedback/20260910_121408/`。
+
 ## 2026-09-10 飞书新资源统一管理权限规则
 
 > 本节记录当前有效规则；历史记录中“只给快照授权”“固定结果表保留既有权限”等旧口径仅作为当时证据，不覆盖本节。规则针对本开发项目使用的当前 Feishu 应用，未默认批量改历史云端文件。

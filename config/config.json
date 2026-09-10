@@ -84,7 +84,7 @@
     "时间戳"
   ],
   "feedback": {
-    "enabled": false,
+    "enabled": true,
     "timezone": "Asia/Shanghai",
     "initial_window_days": 7,
     "incremental_window_days": 3,
