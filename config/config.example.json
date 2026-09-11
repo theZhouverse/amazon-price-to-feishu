@@ -12,7 +12,7 @@
   "save_every": 10,
   "us_zip": "90210",
   "us_location_mode": "proxy",
-  "ca_location_mode": "postal",
+  "ca_location_mode": "direct_no_postal",
   "ca_postal": "M5V 3A8",
   "browser_auto_port": true,
   "browser_no_sandbox": true,

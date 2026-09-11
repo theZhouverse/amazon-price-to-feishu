@@ -174,6 +174,38 @@ class PriceEvidenceTests(unittest.TestCase):
         self.assertEqual(self.b.location_verification_method, 'proxy_egress')
         self.b.page.run_js.assert_not_called()
 
+    def test_ca_direct_no_postal_setup_skips_address_context(self):
+        """CA 无邮编模式只确认 amazon.ca 首页，不打开地址弹窗。"""
+        self.b.profile = MARKETPLACES['CA']
+        self.b.marketplace = 'CA'
+        self.b.location_mode = 'direct_no_postal'
+        self.b.postal_code = ''
+        self.b.page = Mock()
+        self.b._sleep = Mock()
+        self.b._set_postal_code = Mock(side_effect=AssertionError(
+            'direct_no_postal must not set postal'))
+        self.assertTrue(self.b.setup(strict_location=True))
+        self.assertFalse(self.b.location_verified)
+        self.assertTrue(self.b.location_context_ready)
+        self.assertEqual(self.b.location_verification_method, 'direct_no_postal')
+        self.b.page.run_js.assert_not_called()
+
+    def test_ca_direct_no_postal_accepts_current_cad_price_without_postal(self):
+        self.b.profile = MARKETPLACES['CA']
+        self.b.marketplace = 'CA'
+        self.b.location_mode = 'direct_no_postal'
+        self.b.postal_code = ''
+        self.b.location_verified = False
+        self.b.location_context_ready = True
+        self.b.location_verification_method = 'direct_no_postal'
+        cr = self.fetch(self.price('$19.99'),
+                        url='https://www.amazon.ca/dp/B000000001?th=1')
+        self.assertEqual(cr.status, PageStatus.OK)
+        self.assertEqual(cr.currency_code, 'CAD')
+        self.assertFalse(cr.location_verified)
+        self.assertTrue(cr.location_context_ready)
+        self.assertEqual(cr.location_verification_method, 'direct_no_postal')
+
     def test_setup_navigation_false_but_target_host_reached_continues(self):
         """Chrome 慢加载时 get=False 不应误阻断已到达的 Amazon 首页。"""
         self.b.profile = MARKETPLACES['US']

@@ -36,7 +36,9 @@ DEFAULTS = {
     'save_every': 10,                 # 每 N 条原子保存一次缓存
     'us_zip': '90210',                # 仅兼容旧配置；proxy 模式下不会使用
     'us_location_mode': 'proxy',     # US: proxy=依赖出口IP；postal=兼容旧方案
-    'ca_location_mode': 'postal',    # CA: 默认独立加拿大邮编页面校验
+    # CA 默认不再打开地址弹窗或注入邮编；直接读取当前 amazon.ca 页面价格。
+    # postal 仍保留为经过明确验证的兼容模式，proxy 依赖加拿大代理出口。
+    'ca_location_mode': 'direct_no_postal',
     'ca_postal': 'M5V 3A8',
     'proxy': '',                      # 显式浏览器代理；留空使用固定 VPN，不自动读取系统代理
     # 浏览器启动兼容性：Chrome 136+/152 + DrissionPage 4.1.1.4 需要独立
@@ -186,6 +188,10 @@ def load_config(config_path: Path | None = None) -> dict:
         # Amazon浏览器代理必须显式声明；不自动继承通用HTTP_PROXY，避免
         # 调度环境因其他工具的代理变量而悄然切换出口。
         'proxy': 'AMAZON_PROXY',
+        # CA 无邮编策略可由计划任务或临时单点显式覆盖；不把它隐含在
+        # 通用代理变量中，避免迁移机器时悄然改变价格口径。
+        'us_location_mode': 'AMAZON_US_LOCATION_MODE',
+        'ca_location_mode': 'AMAZON_CA_LOCATION_MODE',
         # 允许本机计划任务按运行环境明确开关 Feedback，避免复制一份
         # 容易漂移的 config.json；宿主机生产仍须使用经过验收的紫鸟会话。
         'feedback_enabled': 'AMAZON_FEEDBACK_ENABLED',
@@ -284,8 +290,13 @@ def validate(cfg: dict) -> None:
     if cfg['per_asin_timeout'] < cfg['page_timeout']:
         raise RuntimeError('per_asin_timeout 不能小于 page_timeout')
     for key in ('us_location_mode', 'ca_location_mode'):
-        if str(cfg.get(key) or '').strip().lower() not in {'proxy', 'postal'}:
-            raise RuntimeError(f'{key} 只能是 proxy 或 postal')
+        allowed_modes = {'proxy', 'postal'}
+        if key == 'ca_location_mode':
+            allowed_modes.add('direct_no_postal')
+        mode = str(cfg.get(key) or '').strip().lower()
+        if mode not in allowed_modes:
+            raise RuntimeError(
+                f'{key} 只能是 {"、".join(sorted(allowed_modes))}')
     if not cfg['feishu_app_id']:
         raise RuntimeError('feishu_app_id 不能为空')
     if not isinstance(cfg.get('feishu_allowed_hosts'), list) or not cfg['feishu_allowed_hosts']:

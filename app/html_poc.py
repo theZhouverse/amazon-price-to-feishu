@@ -24,7 +24,7 @@ def main() -> None:
     profile = MARKETPLACES[args.marketplace]
     location_mode = (cfg.get('ca_location_mode') if args.marketplace == 'CA'
                      else cfg.get('us_location_mode')) or (
-                         'postal' if args.marketplace == 'CA' else 'proxy')
+                         'direct_no_postal' if args.marketplace == 'CA' else 'proxy')
     postal = (cfg['ca_postal'] if args.marketplace == 'CA'
               and location_mode == 'postal' else None)
     browser = AmazonBrowser(headless=not args.no_headless, marketplace=args.marketplace,

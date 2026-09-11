@@ -325,9 +325,10 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
 
         location_mode = (cfg.get('ca_location_mode') if marketplace == 'CA'
                          else cfg.get('us_location_mode')) or (
-                             'postal' if marketplace == 'CA' else 'proxy')
-        # US 默认信任代理出口，不传入兼容旧配置的 90210；CA 才传入
-        # 独立加拿大邮编，并且永远不会把邮编拼到商品 URL。
+                             'direct_no_postal' if marketplace == 'CA' else 'proxy')
+        # US 默认信任代理出口，不传入兼容旧配置的 90210；CA 默认直接
+        # 读取 amazon.ca 当前页面价格，不打开地址弹窗。postal 只有显式
+        # 配置时才传入独立加拿大邮编，且永远不会把邮编拼到商品 URL。
         postal_code = (cfg['ca_postal'] if marketplace == 'CA'
                        and location_mode == 'postal' else None)
         if circuit_open.is_set():
@@ -353,7 +354,9 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
         item_orders = {row.asin: index for index, row in enumerate(rows, start=1)}
         try:
             if not browser.setup(strict_location=True):
-                raise RuntimeError(f'浏览器初始化失败(请确认 {marketplace} 出口与邮编)')
+                raise RuntimeError(
+                    f'浏览器初始化失败(请确认 {marketplace} 站点上下文与代理；'
+                    '若使用 postal 模式再确认邮编)')
             if archive_enabled:
                 storage = ArchiveStorage(
                     cfg['html_archive_root'], cfg['html_retention_days'],
@@ -1807,7 +1810,7 @@ def amazon_marketplace_poc_flow(cfg: dict, logger, args) -> None:
     profile = MARKETPLACES[marketplace]
     location_mode = (cfg.get('ca_location_mode') if marketplace == 'CA'
                      else cfg.get('us_location_mode')) or (
-                         'postal' if marketplace == 'CA' else 'proxy')
+                         'direct_no_postal' if marketplace == 'CA' else 'proxy')
     postal = (cfg['ca_postal'] if marketplace == 'CA'
               and location_mode == 'postal' else None)
     row = ReportRow(row_num=0, asin=asin, marketplace=marketplace,

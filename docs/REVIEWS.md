@@ -1,5 +1,14 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-11 CA无邮编直读与调度暂停（最新）
+
+- 代码与配置已切换为 `ca_location_mode=direct_no_postal`：CA 只确认首页到达 `amazon.ca`，不输入或回读邮编，直接采集当前页面价格；结果新增 `location_context_ready` 与 `location_verification_method`，并保留 `location_verified=false`，避免把“页面当前显示价”误报成邮编验证价。
+- 站点、请求/最终ASIN、Page Not Found、残缺页面和CAD币种门禁没有放宽；`?th=1` 仍只是展示参数，跨ASIN跳转仍为 `identity_mismatch`。
+- 四条 Windows `AmazonDaily_*` 计划任务已全部临时禁用并回读 `Disabled/Enabled=False`，任务定义未删除；在无邮编在线A/B和本轮验收完成前不得恢复。
+- 无邮编模式已完成一次真实 CA 只读验证：`B0BNDLKP54` 返回 `status=ok`、CAD、69.99，报告明确记录 `location_verified=false`、`location_context_ready=true`、`direct_no_postal`；这证明页面直读链路可用，但尚未与同ASIN postal 模式做价格一致性 A/B，不能宣称两种位置口径完全一致。
+- PD 回归只读验证仍为 `amazon.com`/USD/39.99/`proxy_egress`，未改变美国站逻辑；两次均未写飞书、未发送通知，结束后无残留浏览器进程。
+- 完整入口 CPD03 单行 dry-run `20260911_153634` 在宿主机网络权限下通过，约41.443秒；飞书只读→CA无邮编浏览器→当前页面读取链路正常，源 `B0D9NT9JQN` 的跨ASIN跳转仍按门禁阻断。第一次沙箱运行的 `WinError 10013` 是环境网络权限，不应与 Amazon/代码失败混淆。
+
 ## 2026-09-11 真实浏览器读取复测（最新）
 
 - US `PD03/B0C5R56QTF` 通过原始 `weekly-run --dry-run --force-fetch` 只读读取：`status=ok`、`amazon.com`、USD、39.99，位置验证通过。未写飞书。

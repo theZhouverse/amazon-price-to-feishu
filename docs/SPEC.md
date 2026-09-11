@@ -267,7 +267,7 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 
 ### 6.1 前端图片、标志和关系检查
 
-总体生产链路中的前端检查和价格解析使用同一次商品页面导航、同一ASIN身份门禁和同一邮编/站点上下文。检查不得通过另一次无预算导航绕过价格任务的节奏与风控限制；检查脚本只读取已加载页面及其可见DOM/结构化数据。历史本地HTML可先用于构造离线样本和选择器匹配，生产结果必须来自当次实时页面。当前开发分支只验收前端检查函数和快照证据，不负责启动紫鸟/ZClaw或完成生产实时采集。检查结果不覆盖H:M价格/币种字段，也不把检查失败重新分类为价格成功。
+总体生产链路中的前端检查和价格解析使用同一次商品页面导航、同一ASIN身份门禁和同一站点/位置策略上下文。检查不得通过另一次无预算导航绕过价格任务的节奏与风控限制；检查脚本只读取已加载页面及其可见DOM/结构化数据。历史本地HTML可先用于构造离线样本和选择器匹配，生产结果必须来自当次实时页面。当前开发分支只验收前端检查函数和快照证据，不负责启动紫鸟/ZClaw或完成生产实时采集。检查结果不覆盖H:M价格/币种字段，也不把检查失败重新分类为价格成功。
 
 - 商品主图：当前商品主图区域（优先`#imageBlock_feature_div`及其`#landingImage`/主图节点）须存在有效图片来源，并且该图片节点能在当前商品DOM中确认、未被隐藏/推荐/其他商品上下文门禁排除。规则不把图片CSS宽高作为独立通过条件；明确缺失为`fail`，页面不可用或身份门禁失败为`unknown`。该项只判断主图存在，不判断图片内容是否与周报一致。
 - 品牌故事：只接受当前商品A+ `#aplusBrandStory_feature_div`/`data-feature-name=aplusBrandStory`模块；该模块必须有精确的标题`From the brand`，并且同一模块内至少有一个有效图片项。模块为空、只出现泛化品牌文案、标题缺失或图片缺失均为`fail`；页面不可用或身份门禁失败为`unknown`。观察值必须分别记录`heading`和`image`，不再与N列主图合并。
@@ -336,11 +336,11 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 | 路由 | 域名 | 币种 | 位置上下文 |
 |---|---|---|---|
 | PD/XD/PDF等US映射 | www.amazon.com | USD | `proxy`：使用实际代理/VPN出口；不注入固定US邮编 |
-| CPD对应CA映射 | www.amazon.ca | CAD | `postal`：独立使用M5V 3A8页面校验 |
+| CPD对应CA映射 | www.amazon.ca | CAD | `direct_no_postal`：不设置邮编，直接读取当前页面；`postal`/`proxy`仅显式启用 |
 
-复用同一抓取、解析、计算及写入代码，不复制一套CPD爬虫。US默认`us_location_mode=proxy`，不读取或覆盖`us_zip`兼容配置，也不打开地址弹窗；位置由紫鸟/VPN或显式浏览器代理的实际出口负责，商品页最终host仍必须是`amazon.com`。若需给自动化指定代理，使用配置`proxy`或环境变量`AMAZON_PROXY`（`host:port`）；不得把通用`HTTP_PROXY/HTTPS_PROXY`静默当作Amazon出口。CA默认`ca_location_mode=postal`，邮编设置使用M5V、3A8两段；只有页面实际截断为五位时允许visible_prefix5证据，若页面含完整六位则必须完整匹配，M5V3A9不能通过M5V3A8校验。邮编只作为页面位置上下文，不拼接到商品URL；链接审计与源行读取统一处理裸ASIN、商品URL及富链接，避免审计通过后商品被解析器静默跳过。
+复用同一抓取、解析、计算及写入代码，不复制一套CPD爬虫。US默认`us_location_mode=proxy`，不读取或覆盖`us_zip`兼容配置，也不打开地址弹窗；位置由紫鸟/VPN或显式浏览器代理的实际出口负责，商品页最终host仍必须是`amazon.com`。若需给自动化指定代理，使用配置`proxy`或环境变量`AMAZON_PROXY`（`host:port`）；不得把通用`HTTP_PROXY/HTTPS_PROXY`静默当作Amazon出口。CA默认`ca_location_mode=direct_no_postal`，只导航`www.amazon.ca`并直接读取当前页面价格，不打开地址弹窗、不写入邮编Cookie；`postal`仍保留为显式兼容模式，设置并回读M5V 3A8，`proxy`则依赖已验证的加拿大代理出口。无邮编直读不代表省份/配送位置已验证，结果必须记录`location_verification_method=direct_no_postal`；只有页面主价、币种和身份门禁全部通过才可采信当前页面价格。邮编只作为显式postal模式的位置上下文，不拼接到商品URL；链接审计与源行读取统一处理裸ASIN、商品URL及富链接，避免审计通过后商品被解析器静默跳过。
 
-正式setup强制位置上下文验证：US proxy模式记录`proxy_egress`并不触碰邮编；CA postal模式必须成功回读加拿大邮编。失败时该子表不采信价格；fetch_once也校验location_verified。正常商品页最终host必须匹配目标站点，并从主价原始文本读取币种：US$/USD与CA$/CAD不能互相替代；裸$仅在已验证站点上下文下解释。币种未知/冲突为currency_error，不参与价格比较。
+正式setup强制站点上下文验证：US proxy模式记录`proxy_egress`并不触碰邮编；CA direct_no_postal模式只验证首页已经到达`amazon.ca`，记录`location_context_ready=true`但`location_verified=false`，不把无邮编直读伪装成邮编验证；CA postal模式必须成功回读加拿大邮编，proxy模式记录`proxy_egress`并要求实际加拿大出口由运行环境负责。无邮编模式仍允许读取当前页面价格，但结果必须保留上述方法字段；站点上下文未准备完成时不得采信价格。正常商品页最终host必须匹配目标站点，并从主价原始文本读取币种：US$/USD与CA$/CAD不能互相替代；裸$仅在目标站点页面并通过币种证据时解释。币种未知/冲突为currency_error，不参与价格比较。
 
 ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式。源快照发现阶段允许业务表头写成`ASIN`或带换行/括号说明的`ASIN\n(...)`，但不把`ASIN_CODE`等普通字段误认作ASIN列。显式URL先验证精确host和Marketplace，拒绝恶意子域、非Amazon和跨站URL；坏URL不能退回显示文字中的ASIN绕过检查。源单元格中的合法Amazon链接必须同时保存为`source_product_url`，并优先作为请求链接使用，以保留`?th=1`、`?psc=1`等变体上下文；纯ASIN或无显式链接时才回退标准输出：`https://www.amazon.com/dp/{ASIN}` 或 `https://www.amazon.ca/dp/{ASIN}`。源链接ASIN必须与ASIN列一致，否则该行无效并进入审计。
 
@@ -401,7 +401,7 @@ ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式�
 
 Amazon 出口必须显式来自 `config.proxy` 或 `AMAZON_PROXY`，或来自已经在本机浏览器中验证的紫鸟/VPN出口；程序不自动继承通用 `HTTP_PROXY/HTTPS_PROXY`。允许的宿主机运行时覆盖包括 `AMAZON_HTML_ARCHIVE_ROOT`、`AMAZON_HTML_ARCHIVE_ENABLED`、`AMAZON_HTML_ARCHIVE_REQUIRED`、`AMAZON_HTML_SERVER_ENABLED`、`AMAZON_HTML_SERVER_BIND`、`AMAZON_HTML_SERVER_PORT`、`AMAZON_WORKERS`、`AMAZON_PROXY` 和 `AMAZON_FEEDBACK_ENABLED`；未知环境变量不得改变配置。`AMAZON_FEEDBACK_ENABLED` 仅是本机运行开关，启用前必须确认两店紫鸟会话、固定 Feedback Sheet 和选择器均已登记并通过只读验收。
 
-跨设备迁移时先停用旧 Windows 计划任务并确认没有 `weekly_scheduler.lock`，再复制代码和经过筛选的 `outputs/`、`data/`、`htmls/` 运行数据；不要复制 `.venv`、`.git`、`.env`、浏览器缓存或临时目录。新宿主机必须重新创建 `.venv`、注入 Secret、确认 Chromium/紫鸟、代理和 CA 邮编环境，依次执行离线回归、登记表只读检查、US/CA 单点、`--weekly-run --dry-run --limit 1` 和最小写入回读，全部通过后才启用新的隐藏计划任务。迁移不能把旧机器的浏览器会话、代理出口或任务注册状态视为已迁移。
+跨设备迁移时先停用旧 Windows 计划任务并确认没有 `weekly_scheduler.lock`，再复制代码和经过筛选的 `outputs/`、`data/`、`htmls/` 运行数据；不要复制 `.venv`、`.git`、`.env`、浏览器缓存或临时目录。新宿主机必须重新创建 `.venv`、注入 Secret、确认 Chromium/紫鸟、代理和 CA 位置模式（当前默认为`direct_no_postal`；若改用postal才需要邮编）、依次执行离线回归、登记表只读检查、US/CA 单点、`--weekly-run --dry-run --limit 1` 和最小写入回读，全部通过后才启用新的隐藏计划任务。迁移不能把旧机器的浏览器会话、代理出口或任务注册状态视为已迁移。
 
 ## 15. Secret和资源权限
 
@@ -527,13 +527,15 @@ $env:PYTHONPATH='app'
 
 ### 19.1 部署
 
-建立.venv并安装config/requirements.txt，按第3节注入Secret，保留本机JSON和资源登记。先离线测试、只读资源检查、US/CA最小样本、最小表，再全量。US使用实际代理/VPN出口，不依赖固定示例邮编；CA按`amazon.ca`与独立加拿大位置上下文验收，并分别验证站点和币种。
+建立.venv并安装config/requirements.txt，按第3节注入Secret，保留本机JSON和资源登记。先离线测试、只读资源检查、US/CA最小样本、最小表，再全量。US使用实际代理/VPN出口，不依赖固定示例邮编；CA默认按`amazon.ca`直接读取当前页面价格，不设置邮编，并分别验证站点、请求/最终ASIN和CAD币种；若切回postal模式，才额外验收M5V 3A8回读。
 
 ### 19.2 每天两次与周一换周
 
 当前Windows任务由`bin/schedule.ps1`创建四条价格槽位任务：周一07:30 `AmazonDaily_0730`、周二至周五07:30 `AmazonDaily_0730_weekday`、周一15:30 `AmazonDaily_1530`、周二至周五15:30 `AmazonDaily_1530_weekday`。Feedback逻辑任务复用周一至周五07:30的两个价格槽位，在同一进程和统一锁内只执行一次；不得额外安装与之并发写`Feedback差评汇总`的独立任务。四条任务均为WeeksInterval=1、EndBoundary为空。任务直接以`wscript.exe //B //NoLogo bin/hidden_ps1.vbs bin/scheduled_run.ps1 <scheduled_slot>`启动隐藏PowerShell，再执行`app/main.py --weekly-run --confirm --scheduled-slot <scheduled_slot>`，07:30槽位额外执行`feedback_0730`阶段，不经过可见的bat/cmd窗口。旧版本若仍显示`Execute=cmd.exe`或`scheduled_run.bat`，必须重新运行安装脚本替换任务定义。
 
 当前账号为Interactive：需电脑开机且账号已登录；不需GPT窗口。任务Hidden=true、Execute=wscript.exe、WScript批处理模式与PowerShell WindowStyle=Hidden共同保证不创建可见终端；用户不能因关闭控制台误停。StartWhenAvailable=true，开机或恢复后补触发错过时段，入口必须把原定`scheduled_slot`继续传给Python，不能按实际补跑时间重新判断来源；整批锁与IgnoreNew共同防重叠。日志使用UTF-8保存开始/结束、退出码和`scheduled_slot`。安装脚本bin/schedule.ps1创建上述四条时段任务；若安装前两个15:30任务处于禁用状态，重装必须保持下午整组禁用，不得因修复早间任务静默恢复下午执行。不操作HTML服务或防火墙，不另装重复调度器。
+
+在价格/位置策略改造、在线A/B和最小回归未完成前，四条`AmazonDaily_*`任务必须全部处于`Enabled=false`/`State=Disabled`，避免旧的邮编逻辑在后台触发；暂停属于运行态控制，不删除任务定义。只有代码、配置、文档、离线回归及CA/US只读样本验收完成后，才可按用户明确指令恢复相应时段，并在恢复前回读任务状态和`ca_location_mode`。
 
 调度时段与来源周期必须按第16.1节解释：周一07:30只运行上一周期的`monday_carryover`，周一15:30执行`monday_switch`并要求登记表已有更高的最新有效序号，周二至周五07:30/15:30运行`weekday_steady`并复用周一15:30固化的本周manifest。`StartWhenAvailable`导致周一07:30延迟补跑时仍保持该时段的上周来源规则；如果错过周一15:30，不能将补跑伪装成周一早间，必须记录实际`selection_mode`并在没有最新周报时停止。
 

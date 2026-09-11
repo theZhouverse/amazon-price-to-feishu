@@ -1,5 +1,17 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 CA取消邮编、直接读取页面价格与调度暂停（最新）
+
+- [x] 按用户要求暂停本机全部 Amazon Windows 计划任务：`AmazonDaily_0730`、`AmazonDaily_0730_weekday`、`AmazonDaily_1530`、`AmazonDaily_1530_weekday` 均已回读 `State=Disabled`、`Enabled=False`；任务定义保留，未删除，等待本轮改造完成后再按明确指令恢复。
+- [x] CA 位置策略改为 `ca_location_mode=direct_no_postal`：只导航 `www.amazon.ca`，不打开地址弹窗、不写入邮编 Cookie，直接读取当前页面展示价格；`postal` 和 `proxy` 保留为显式兼容模式。
+- [x] 抓取结果新增位置上下文区分：无邮编直读记录 `location_context_ready=true`、`location_verified=false`、`location_verification_method=direct_no_postal`；仍强制最终站点、请求/最终 ASIN、页面主体和 CAD 币种门禁，不把无邮编直读冒充邮编验证。
+- [x] 统一正式抓取、R1.7 单ASIN PoC、HTML/MHTML工具和缓存恢复读取新模式；新增 `AMAZON_CA_LOCATION_MODE` 运行时覆盖，便于隔离 A/B 测试，不复用通用 HTTP 代理变量。
+- [x] 新增无邮编 CA setup/fetch 回归，完整离线套件 `353/353` 通过；Python `compileall`、JSON 解析和 `git diff --check`均通过。尚未恢复定时任务，未写飞书、未发通知。
+- [x] CA 无邮编真实只读 PoC：`app/run.py --amazon-poc-marketplace CA --amazon-poc-asin B0BNDLKP54`，显式 `AMAZON_PROXY=127.0.0.1:7897`，总耗时约32.326秒（报告墙钟30.688秒）；不设置邮编，最终 `https://www.amazon.ca/dp/B0BNDLKP54?th=1`，`status=ok`、CAD、展示价69.99、`location_context_ready=true`、`location_verified=false`、`location_verification_method=direct_no_postal`。证据：`outputs/poc_resources/r1_7_ca_B0BNDLKP54.json`、`outputs/logs/run_20260911_1533.log`。
+- [x] PD 回归只读 PoC：同一显式代理下 `B0C5R56QTF` 总耗时约36.111秒（报告墙钟约35.0秒），最终 `amazon.com`、USD、`status=ok`、展示价39.99、`location_verification_method=proxy_egress`。证据：`outputs/poc_resources/r1_7_us_B0C5R56QTF.json`、`outputs/logs/run_20260911_1534.log`。
+- [x] 完整入口 CPD03 单行 dry-run：run_id `20260911_153634`，显式代理下总耗时约41.443秒；读取飞书登记表后进入 CA 浏览器，`direct_no_postal` setup 成功，最终请求 `B0D9NT9JQN` 跳转 `B0BNDLKP54`，正确记录 `identity_mismatch`、CAD、`location_context_ready=true`，未把落地ASIN价格写回源ASIN。证据：`outputs/daily_runs/2026-09-11/20260911_153634_weekly_bundle.json`、`outputs/logs/run_20260911_1536.log`；首次沙箱网络失败仅发生在飞书只读认证，未启动浏览器，非代码错误。
+- [ ] 后续验收：同一 CPD ASIN 分别执行旧 postal 与 `direct_no_postal` 只读对照，记录setup/商品耗时、最终URL/ASIN、CAD价格和页面位置提示；确认价格口径后再决定是否长期保持无邮编模式。
+
 ## 2026-09-11 真实浏览器读取复测（最新）
 
 - [x] US 单行只读：原始入口 `app/run.py --weekly-run --dry-run --force-fetch --sheets PD03 --limit 1`，run_id `20260911_144134`，显式 `AMAZON_PROXY=127.0.0.1:7897`，总耗时约58.207秒。`PD03/B0C5R56QTF` 最终 URL 为 `https://www.amazon.com/dp/B0C5R56QTF?th=1`，`status=ok`、USD、展示价39.99、目标价39.99、最终价39.99、位置验证通过、一次成功；未写飞书。证据：`outputs/daily_runs/2026-09-11/20260911_144134_weekly_bundle.json`、`outputs/logs/run_20260911_1441.log`。

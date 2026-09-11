@@ -109,6 +109,9 @@ class CrawlResult:
     product_url: str = ''
     source_product_url: str = ''
     location_verified: bool = False
+    # 可抓取的位置策略上下文；direct_no_postal 为 True 但不代表邮编已验证。
+    location_context_ready: bool = False
+    location_verification_method: str = ''
     risk_cooldown_seconds: float = 0.0
     html_path: str = ''
     html_url: str = ''
@@ -179,6 +182,8 @@ class CrawlResult:
             'product_url': self.product_url,
             'source_product_url': self.source_product_url,
             'location_verified': self.location_verified,
+            'location_context_ready': self.location_context_ready,
+            'location_verification_method': self.location_verification_method,
             'risk_cooldown_seconds': self.risk_cooldown_seconds,
             'html_path': self.html_path, 'html_url': self.html_url,
             'html_sha256': self.html_sha256, 'html_size_bytes': self.html_size_bytes,

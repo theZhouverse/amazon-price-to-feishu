@@ -228,6 +228,9 @@ def _crawl_from_dict(d: dict) -> CrawlResult | None:
     cr.product_url = d.get('product_url') or ''
     cr.source_product_url = d.get('source_product_url') or ''
     cr.location_verified = bool(d.get('location_verified'))
+    cr.location_context_ready = bool(d.get('location_context_ready',
+                                           cr.location_verified))
+    cr.location_verification_method = d.get('location_verification_method') or ''
     cr.risk_cooldown_seconds = float(d.get('risk_cooldown_seconds') or 0)
     cr.html_path = d.get('html_path') or ''
     cr.html_url = d.get('html_url') or ''

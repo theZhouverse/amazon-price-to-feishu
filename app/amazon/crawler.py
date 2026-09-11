@@ -64,10 +64,14 @@ class AmazonBrowser:
         self.profile: MarketplaceProfile = MARKETPLACES[marketplace]
         self.marketplace = marketplace
         # US 默认信任已配置的代理/固定 VPN 出口，不再把示例邮编 90210
-        # 注入 Amazon 地址组件。CA 默认仍使用独立的加拿大邮编上下文。
+        # 注入 Amazon 地址组件。CA 默认直接读取 amazon.ca 当前页面价格，
+        # 不打开地址弹窗；postal/proxy 仍可由配置显式选择。
         self.location_mode = (location_mode or
-                              ('postal' if marketplace == 'CA' else 'proxy')).strip().lower()
-        if self.location_mode not in {'proxy', 'postal'}:
+                              ('direct_no_postal' if marketplace == 'CA' else 'proxy')).strip().lower()
+        allowed_modes = {'proxy', 'postal'}
+        if marketplace == 'CA':
+            allowed_modes.add('direct_no_postal')
+        if self.location_mode not in allowed_modes:
             raise RuntimeError(f'未知 location_mode: {self.location_mode}')
         if self.location_mode == 'postal':
             self.postal_code = (postal_code or
@@ -75,6 +79,9 @@ class AmazonBrowser:
         else:
             self.postal_code = ''
         self.location_verified = False
+        # location_verified 专用于已验证代理/邮编；无邮编直读仍允许读取页面，
+        # 但必须用独立 ready 状态区分“可抓取”与“邮编已验证”。
+        self.location_context_ready = False
         self.location_error = ''
         self.location_verification_method = ''
         self._sleep = time.sleep
@@ -243,8 +250,9 @@ class AmazonBrowser:
         """初始化站点和位置上下文，失败返回 False。
 
         location_mode=proxy（默认 US）不触碰地址弹窗或邮编 cookie，位置由
-        浏览器实际代理/VPN出口决定；location_mode=postal（默认 CA）才设置并
-        回读对应站点的邮编。两种模式都仍由商品页最终域名门禁保护。
+        浏览器实际代理/VPN出口决定；location_mode=direct_no_postal（默认 CA）
+        直接读取 amazon.ca 当前页面价格，不声明邮编已验证；postal 才设置并
+        回读对应站点的邮编。所有模式都仍由商品页最终域名/ASIN/币种门禁保护。
         """
         self._log('info',
                   f'setup开始 marketplace={self.marketplace} '
@@ -253,7 +261,7 @@ class AmazonBrowser:
         try:
             location_mode = getattr(
                 self, 'location_mode',
-                'postal' if self.marketplace == 'CA' else 'proxy')
+                'direct_no_postal' if self.marketplace == 'CA' else 'proxy')
             language = 'en_CA' if self.marketplace == 'CA' else 'en_US'
             navigation_ok = self.page.get(
                 f'https://www.{self.profile.domain}/?language={language}',
@@ -296,7 +304,14 @@ class AmazonBrowser:
                 # 强制最终页面 host 与目标 Marketplace 一致，代理出口由运行
                 # 环境（紫鸟/VPN/显式 proxy）负责。
                 self.location_verified = True
+                self.location_context_ready = True
                 self.location_verification_method = 'proxy_egress'
+            elif location_mode == 'direct_no_postal':
+                # 不修改 Amazon 地址 Cookie；仅确认已到达目标 amazon.ca 首页。
+                # 该模式有意不把当前地区冒充为邮编已验证，结果中保留独立方法。
+                self.location_verified = False
+                self.location_context_ready = True
+                self.location_verification_method = 'direct_no_postal'
             else:
                 if not getattr(self, 'postal_code', ''):
                     self.location_error = 'postal_missing_for_postal_mode'
@@ -313,13 +328,15 @@ class AmazonBrowser:
                 # `Update location`），这属于初始化瞬态，不应要求整轮任务
                 # 由调度器重启。有限重试并保留最后一次诊断；连续失败才阻断。
                 self.location_verified = False
+                self.location_context_ready = False
                 for location_attempt in range(3):
                     self.location_verified = self._set_postal_code()
                     if self.location_verified:
                         break
                     if location_attempt < 2:
                         self._sleep(2)
-            if strict_location and not self.location_verified:
+                self.location_context_ready = self.location_verified
+            if strict_location and not self.location_context_ready:
                 print(f'[setup] {self.marketplace} 位置上下文未能验证 '
                       f'(mode={location_mode}, value={self.postal_code or "<proxy>"})',
                       flush=True)
@@ -329,6 +346,7 @@ class AmazonBrowser:
             self._log('info',
                       f'setup成功 marketplace={self.marketplace} '
                       f'location_verified={getattr(self, "location_verified", False)} '
+                      f'location_context_ready={getattr(self, "location_context_ready", False)} '
                       f'location_method={getattr(self, "location_verification_method", "") or "none"} '
                       f'page_url={getattr(self.page, "url", "")}')
             return True
@@ -345,7 +363,7 @@ class AmazonBrowser:
             self, 'location_mode',
             'postal' if self.marketplace == 'CA' else 'proxy')
         if location_mode != 'postal' or not getattr(self, 'postal_code', ''):
-            self.location_error = 'postal_setup_not_required_in_proxy_mode'
+            self.location_error = 'postal_setup_not_required_in_non_postal_mode'
             return location_mode == 'proxy'
         try:
             normalize = lambda text: re.sub(r'[^A-Z0-9]', '', text.upper())
@@ -442,6 +460,10 @@ class AmazonBrowser:
         cr.marketplace = self.marketplace
         cr.currency_code = self.profile.currency_code
         cr.location_verified = self.location_verified
+        cr.location_context_ready = getattr(self, 'location_context_ready',
+                                             self.location_verified)
+        cr.location_verification_method = getattr(
+            self, 'location_verification_method', '')
         url = row.product_url or self.profile.product_url(row.asin)
         cr.product_url = url
         cr.source_product_url = getattr(row, 'source_product_url', '') or ''
@@ -556,9 +578,9 @@ class AmazonBrowser:
                 cr.currency_code = ''
                 cr.error = 'marketplace_mismatch: 最终页面域名与目标站点不一致'
                 return cr
-            if not self.location_verified:
+            if not getattr(self, 'location_context_ready', self.location_verified):
                 cr.status = PageStatus.CRAWL_ERROR
-                cr.error = 'location_unverified: 未验证目标邮编，禁止采信价格'
+                cr.error = 'location_unverified: 站点位置上下文未准备完成，禁止采信价格'
                 return cr
 
             # 等待当前商品主体；不能等待全页面任意 `.a-price`，因为推荐卡
@@ -733,17 +755,25 @@ class AmazonBrowser:
                 return cr
             location_mode = getattr(
                 self, 'location_mode',
-                'postal' if self.marketplace == 'CA' else 'proxy')
-            if location_mode == 'proxy':
+                'direct_no_postal' if self.marketplace == 'CA' else 'proxy')
+            if location_mode in {'proxy', 'direct_no_postal'}:
                 # US proxy 模式不再读取或比较固定邮编；只继承 setup 对实际
-                # 浏览器出口模式的确认，最终 amazon.com host 门禁仍在上方。
+                # 浏览器出口模式的确认；CA direct_no_postal 有意不声称邮编
+                # 已验证。最终站点 host 门禁仍在上方。
                 cr.location_verified = self.location_verified
+                cr.location_context_ready = getattr(
+                    self, 'location_context_ready', self.location_verified)
+                cr.location_verification_method = getattr(
+                    self, 'location_verification_method', '')
             else:
                 cr.location_verified = self._postal_matches(sample.get('postal') or '')
-            if not cr.location_verified:
+                cr.location_context_ready = cr.location_verified
+                cr.location_verification_method = getattr(
+                    self, 'location_verification_method', '')
+            if not getattr(cr, 'location_context_ready', cr.location_verified):
                 cr.status = PageStatus.CRAWL_ERROR
                 cr.error = ('location_unverified: 当前商品页面位置上下文未验证'
-                            if location_mode == 'proxy'
+                            if location_mode in {'proxy', 'direct_no_postal'}
                             else 'location_unverified: 当前商品页面邮编不匹配')
                 return cr
             shell = sample.get('product_shell') or {}

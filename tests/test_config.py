@@ -87,6 +87,7 @@ class TestConfigSources(unittest.TestCase):
                 'AMAZON_HTML_SERVER_PORT': '9876',
                 'AMAZON_WORKERS': '2',
                 'AMAZON_FEEDBACK_ENABLED': 'false',
+                'AMAZON_CA_LOCATION_MODE': 'direct_no_postal',
             }
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, env, clear=True):
@@ -96,6 +97,7 @@ class TestConfigSources(unittest.TestCase):
             self.assertEqual(cfg['html_server_port'], 9876)
             self.assertEqual(cfg['workers'], 2)
             self.assertFalse(cfg['feedback']['enabled'])
+            self.assertEqual(cfg['ca_location_mode'], 'direct_no_postal')
 
     def test_invalid_runtime_boolean_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
