@@ -1,5 +1,14 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 今日手动全量读取（无邮编 CA，最新）
+
+- [x] 在四条 Windows 计划任务均暂停的状态下，手动按周五下午槽位 `weekday_1530` 启动正式全量：run_id `20260911_154123`，来源 `period_id/source_period_id=seq-4`，`selection_mode=weekday_steady`，未切换周报。
+- [x] 18 个价格子表、719 行完成抓取与前端结果处理；写入固定结果表 `base_rows_written=719`、`frontend_checks_written=719`，价格有效写入 `493` 行，`226` 行保留阻断；状态为 `partial`，其中 `ok=493`、`identity_mismatch=193`、`source_data_invalid=29`、`parse_error=4`，没有把异常行写成错误价格。
+- [x] 市场站点统计：US 549 行、CA 170 行；CA 全部使用 `direct_no_postal`，日志 setup 记录 `location_context_ready=true`、`location_verified=false`、`location_method=direct_no_postal`，没有邮编弹窗等待。US 继续使用 `proxy_egress`，PD 回归逻辑未改变。
+- [x] 固定结果表写入后的逐行回读验证通过（delivery `verified` 全部为 true）；本轮 HTML 归档保持关闭，未新增 HTML 文件。Feedback 按 `weekday_1530` 规则跳过，没有重复采集。
+- [x] 一次性汇总通知已发送给 8 名应用协作者，失败 0；通知证据：`outputs/daily_runs/2026-09-11/20260911_154123_notifications.json`。完整本地证据：`outputs/daily_runs/2026-09-11/20260911_154123_weekly_bundle.json`、`20260911_154123_weekly_summary.json`、`20260911_154123_delivery.json`、`outputs/logs/run_20260911_1541.log`。
+- [x] 运行总耗时约 `4679.651` 秒（约 77 分 59.651 秒，summary 统计 `4672.719` 秒）；运行结束后无 Chrome/Python 残留进程。Windows 四条任务仍为 `Disabled/Enabled=False`，未因手动运行自动恢复。
+
 ## 2026-09-11 CA取消邮编、直接读取页面价格与调度暂停（最新）
 
 - [x] 按用户要求暂停本机全部 Amazon Windows 计划任务：`AmazonDaily_0730`、`AmazonDaily_0730_weekday`、`AmazonDaily_1530`、`AmazonDaily_1530_weekday` 均已回读 `State=Disabled`、`Enabled=False`；任务定义保留，未删除，等待本轮改造完成后再按明确指令恢复。

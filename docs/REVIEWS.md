@@ -1,5 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-11 今日全量读取结果（无邮编 CA，最新）
+
+- 正式手动 run `20260911_154123` 已完成 18 个子表、719 行处理和固定结果表回写；`493` 行价格写入、`226` 行阻断，整体 `partial`。阻断主要为 `identity_mismatch=193`，另有 `source_data_invalid=29`、`parse_error=4`；身份门禁没有放宽。
+- CA 170 行均使用 `direct_no_postal`，页面上下文初始化不再消耗邮编设置的分钟级等待；US 549 行继续使用 `proxy_egress`。delivery 逐行回读验证为 true，8 名协作者通知成功，失败 0。
+- 本轮属于周五 `weekday_1530/weekday_steady`，Feedback 按规则跳过；HTML 归档关闭；四条 Windows 计划任务仍全部 Disabled。运行总耗时约 4679.651 秒，结果证据已写入 TASKS 所列文件。
+- 剩余边界：无邮编直读验证了当前页面价格，不等同于特定加拿大省份/邮编配送口径；仍需后续根据业务决定是否长期接受该口径。源 ASIN 被 Amazon 重定向的 CPD 行继续进入恢复/人工映射，不得用落地 ASIN 价格替代。
+
 ## 2026-09-11 CA无邮编直读与调度暂停（最新）
 
 - 代码与配置已切换为 `ca_location_mode=direct_no_postal`：CA 只确认首页到达 `amazon.ca`，不输入或回读邮编，直接采集当前页面价格；结果新增 `location_context_ready` 与 `location_verification_method`，并保留 `location_verified=false`，避免把“页面当前显示价”误报成邮编验证价。
