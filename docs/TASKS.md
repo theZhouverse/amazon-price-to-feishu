@@ -1,5 +1,12 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 真实浏览器读取复测（最新）
+
+- [x] US 单行只读：原始入口 `app/run.py --weekly-run --dry-run --force-fetch --sheets PD03 --limit 1`，run_id `20260911_144134`，显式 `AMAZON_PROXY=127.0.0.1:7897`，总耗时约58.207秒。`PD03/B0C5R56QTF` 最终 URL 为 `https://www.amazon.com/dp/B0C5R56QTF?th=1`，`status=ok`、USD、展示价39.99、目标价39.99、最终价39.99、位置验证通过、一次成功；未写飞书。证据：`outputs/daily_runs/2026-09-11/20260911_144134_weekly_bundle.json`、`outputs/logs/run_20260911_1441.log`。
+- [x] CPD03 源链接只读：同一原始入口，run_id `20260911_144256`，总耗时约313.314秒。请求 `B0D9NT9JQN` 在 `amazon.ca` 最终落到 `B0BNDLKP54`，结果为 `identity_mismatch`、币种CAD；身份门禁生效，没有误写落地 ASIN 价格。证据：`outputs/daily_runs/2026-09-11/20260911_144256_weekly_bundle.json`、`outputs/logs/run_20260911_1442.log`。
+- [x] 加拿大落地 ASIN 只读 PoC：`app/run.py --amazon-poc-marketplace CA --amazon-poc-asin B0BNDLKP54`，总耗时约308.458秒（其中位置上下文等待约4分41秒，商品读取耗时23.652秒）。最终 URL 为 `https://www.amazon.ca/dp/B0BNDLKP54?th=1`，`status=ok`、CAD、展示价69.99、加拿大邮编 `M5V 3A8` `visible_exact` 验证通过、currency evidence=true。证据：`outputs/poc_resources/r1_7_ca_B0BNDLKP54.json`、`outputs/logs/run_20260911_1448.log`。
+- [x] 三次测试均为只读路径：没有 `--confirm`、没有结果表写入、没有通知发送；测试结束回读 `CHROME_PROCESSES=NONE`。结果说明：浏览器与US/CA读取链路可运行，CPD03剩余问题是源 ASIN 重定向/映射，不应放宽身份门禁。
+
 ## 2026-09-11 Docker方案取消、宿主机本地交付（最新）
 
 - [x] 根据最新决策取消 Docker 支持：删除 `deploy/docker/` 下 Dockerfile、Compose、entrypoint 和迁移说明，同时删除 Docker 专用静态测试；不再把容器构建、镜像迁移或容器 cron 纳入交付验收。

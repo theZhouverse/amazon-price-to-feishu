@@ -1,5 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-11 真实浏览器读取复测（最新）
+
+- US `PD03/B0C5R56QTF` 通过原始 `weekly-run --dry-run --force-fetch` 只读读取：`status=ok`、`amazon.com`、USD、39.99，位置验证通过。未写飞书。
+- CPD03 源 `B0D9NT9JQN` 在 `amazon.ca` 仍重定向到 `B0BNDLKP54`，按请求 ASIN与最终 ASIN不一致正确记录 `identity_mismatch`，币种 CAD；不能把落地页价格写回原 ASIN。
+- 直接读取落地 ASIN `B0BNDLKP54` 的 CA PoC 通过：`status=ok`、CAD、69.99、`M5V 3A8` `visible_exact`；说明 CA 浏览器/邮编/币种链路正常，CPD源数据仍需人工映射或恢复清单处理。
+- 本轮三次读取均未写飞书或发送通知，结束后无残留 Chrome。US总耗时约58.207秒；CPD源重定向约313.314秒；CA落地ASIN PoC约308.458秒，其中位置上下文等待约4分41秒，后续需单独优化CA地址上下文等待，但不应通过放宽身份门禁提速。
+
 ## 2026-09-11 Docker方案取消、宿主机本地交付边界（最新）
 
 - 根据最新决策，本项目不再支持 Docker。`deploy/docker/` 下的 Dockerfile、Compose、entrypoint 和迁移说明，以及 Docker 专用静态测试已从当前工作区删除；历史构建记录仅保留作追溯，不能作为当前部署选项。
