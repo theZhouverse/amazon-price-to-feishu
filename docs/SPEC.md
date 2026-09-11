@@ -1,6 +1,6 @@
 # SPEC：Amazon 周报前端价格捕捉任务
 
-> 当前规格，更新于2026-09-10。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
+> 当前规格，更新于2026-09-11。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
 >
 > 旧版已完整保存到[历史目录](history/README.md)，其中“每周新建结果表”“HTML门禁”“仅下午执行”“8月31日截止”不再是当前规则。
 
@@ -52,9 +52,14 @@ flowchart TD
     I --> J
     J --> K[PD等使用amazon.com和USD；CPD使用amazon.ca和CAD]
     K --> L[原子读取URL和ASIN及邮编和页面DOM；主价、促销和前端检查共用页面证据]
-    L --> L1[检查主图/品牌故事图、尺寸、BSR、父子ASIN、环保标志和AC标志]
-    L --> L2[每个商品结束后等待1至3秒；不依赖HTML]
+    L --> L0{商品详情结构完整?}
+    L0 -- 否 --> L0a[记录incomplete_product_page；轻量重建Tab重试一次]
+    L0a --> L0b{同子表残缺页达到8条?}
+    L0b -- 是 --> L0c[子表级熔断；剩余行进入恢复清单]
+    L0b -- 否 --> L2
+    L0 -- 是 --> L1[检查主图/品牌故事图、尺寸、BSR、父子ASIN、环保标志和AC标志]
     L1 --> L2
+    L0c --> L2
     L2 --> M[逐表保存bundle、缓存和日志；不等待HTML]
     M --> N[验证最新批次身份、源指纹及ASIN集合；旧批次禁止发布]
     N --> O[备份固定表；按ASIN组合A:G、H:M、N:T及U:V并发布完整行]
@@ -316,7 +321,7 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 
 正式配置workers=4；每次处理一个子表/Marketplace，使用一个浏览器、最多4个互斥商品Tab，而不是4个浏览器。商品不足4个时减少Tab。US/CA上下文分别初始化，不并发混用邮编。
 
-当前配置：page_timeout=30秒、price_wait_timeout=12秒、per_asin_timeout=90秒、retry=2；风险冷却配置60～180秒。程序对Captcha、访问受限和429/503记录风险，不自动切换VPN/IP，也不绕过验证码。飞书 Drive 创建周报副本遇到408/429/5xx或传输超时时最多退避重试3次；每次重试前按精确副本名称回查根目录，避免超时后服务端已成功而客户端重复创建。
+当前配置：page_timeout=30秒、price_wait_timeout=12秒、per_asin_timeout=90秒、retry=2；风险冷却配置60～180秒；同一子表连续8条残缺商品页触发熔断，避免在 Amazon 风控/资源降级时继续空跑。程序对Captcha、访问受限和429/503记录风险，不自动切换VPN/IP，也不绕过验证码。飞书 Drive 创建周报副本遇到408/429/5xx或传输超时时最多退避重试3次；每次重试前按精确副本名称回查根目录，避免超时后服务端已成功而客户端重复创建。
 
 每个CLI入口（人工、定时、恢复及维护）由Python持有同一个outputs/weekly_scheduler.lock，覆盖准备、抓取、发布、通知全过程。PowerShell仅负责启动与日志，不重复占锁；已有任务时第二个入口以75退出，不改变云端状态。调度包装器必须保留Python真实退出码，并在异常和非零退出时仍写入`END`收口行；锁文件残留不代表进程仍存活，OS释放锁后可重启。
 
@@ -444,6 +449,7 @@ App ID为非敏感配置；真实Secret只走第3节来源。不输出完整凭�
 | 明确404 | page_not_found | 折扣类型及一致性为- |
 | 当前商品availability控件明确售罄且无主价 | sold_out | 确认后以-输出，不当技术异常 |
 | Captcha、加载失败、身份不匹配 | crawl_error | 阻断，记录原因和证据 |
+| URL/标题正确但商品详情DOM残缺（主图、标题、Buy Box、主价区均未展示） | incomplete_product_page (`crawl_error`) | 轻量重建Tab重试一次；同子表连续8条则熔断，剩余行进入恢复清单；不归类为售罄或普通价格解析失败 |
 | 主价冲突或无法可靠解析 | parse_error | 阻断，不能冒充售罄 |
 | 站点/币种组合错误 | currency_error | 阻断，不换汇、不比较 |
 | 正常售价/目标价等源字段无效 | source_data_invalid | 不抓取，写异常空结果 |

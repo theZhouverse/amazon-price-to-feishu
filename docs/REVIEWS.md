@@ -1,5 +1,14 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-11 Amazon残缺商品页根因与熔断修复（最新）
+
+- 本轮全量 `20260911_073004` 已安全完成投递：A:G和N:T各719行已同步，H:M仅0行写入，Feedback写入11行；不存在错误价格覆盖。
+- US `B0C5R56QTF` 与 CA `B0BN5988BX` 的异常证据截图均显示商品详情主体未加载，仅余顶部导航和推荐卡。页面标题、URL、ASIN、邮编和域名均正确，故不是源链接或身份错配。
+- 已在 `app/amazon/crawler.py` 加入商品结构 shell 证据、推荐卡价格排除、`incomplete_product_page` 分类与同子表连续8条熔断。无明确售罄证据时，该页不再写成售罄或零价格。
+- 在线复测 US `20260911_100819`、CA `20260911_101439` 均得到 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；CA `B0D9NT9JQN` 仍确认 `amazon.ca`/CAD/邮编有效。新分类已生效，但不代表当前 Amazon 出口已恢复；恢复前仍需切换/验证可用出口后做 US、CA各一条正常商品测试。
+- 本轮无网络发布、无飞书表格变更；新策略首次全量验收和 Amazon 出口恢复仍是未完成边界。
+
+
 ## 2026-09-11 明早任务发布前审查（最新）
 
 - 已修复会让计划任务退化为`manual`模式的调度参数断链，并在Windows上重装为周一/周二至周五四个显式槽位。明早由启用且隐藏的`AmazonDaily_0730_weekday`传入`weekday_0730`；15:30两个槽位仍禁用，不能在通知或统计中误报下午任务已恢复。

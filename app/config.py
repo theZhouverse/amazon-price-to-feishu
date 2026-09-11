@@ -32,6 +32,7 @@ DEFAULTS = {
     'price_wait_timeout': 12,         # 等待价格元素出现(秒)
     'per_asin_timeout': 90,           # 单个 ASIN 总超时(秒)
     'retry': 2,                       # 技术失败重试次数
+    'incomplete_page_circuit_threshold': 8,  # 残缺商品页连续达阈值后中断当表
     'save_every': 10,                 # 每 N 条原子保存一次缓存
     'us_zip': '90210',                # 兼容旧配置名；语义为 US postal code
     'ca_postal': 'M5V 3A8',

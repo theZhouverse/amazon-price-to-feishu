@@ -8,6 +8,7 @@
   "price_wait_timeout": 12,
   "per_asin_timeout": 90,
   "retry": 2,
+  "incomplete_page_circuit_threshold": 8,
   "save_every": 10,
   "us_zip": "90210",
   "ca_postal": "M5V 3A8",

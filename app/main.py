@@ -306,6 +306,10 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
             q.put(r)
         done_count = [0]
         lock = threading.Lock()
+        incomplete_count = cfg.get('_run_incomplete_count') or [0]
+        circuit_open = cfg.get('_run_circuit_open') or threading.Event()
+        circuit_threshold = max(1, int(cfg.get(
+            'incomplete_page_circuit_threshold', 8)))
         cache_write_lock = threading.Lock()
         save_state = [0]
         total = len(todo)
@@ -320,6 +324,14 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
             logger.info(f'[缓存] {sheet} 增量保存 {len(snapshot)} 条')
 
         postal_code = cfg['ca_postal'] if marketplace == 'CA' else cfg['us_zip']
+        if circuit_open.is_set():
+            return [CrawlResult(
+                asin=row.asin, run_id=run_id, marketplace=marketplace,
+                product_url=row.product_url,
+                source_product_url=getattr(row, 'source_product_url', ''),
+                status=PageStatus.CRAWL_ERROR,
+                error='batch_circuit_breaker: 运行级残缺商品页熔断，未继续请求')
+                    for row in rows]
         browser = AmazonBrowser(headless=headless, us_zip=cfg['us_zip'],
                                 proxy=cfg.get('proxy') or None,
                                 tabs=workers, marketplace=marketplace,
@@ -342,6 +354,8 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
 
             def _worker_loop():
                 while True:
+                    if circuit_open.is_set():
+                        break
                     try:
                         row = q.get_nowait()
                     except queue.Empty:
@@ -409,6 +423,14 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
                         finally:
                             if tab is not None:
                                 browser.release(tab)
+                    if (cr.error or '').startswith('incomplete_product_page'):
+                        with lock:
+                            incomplete_count[0] += 1
+                            if incomplete_count[0] >= circuit_threshold:
+                                circuit_open.set()
+                                logger.error(
+                                    f'[熔断] {sheet} 连续收到 {incomplete_count[0]} 个残缺商品页，'
+                                    '停止继续请求本表；剩余行进入恢复清单')
                     should_save = False
                     with lock:
                         results_map[row.asin] = cr
@@ -431,6 +453,22 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
                 t.start()
             for t in threads:
                 t.join()
+            if circuit_open.is_set():
+                # Preserve an explicit result for rows not dequeued after the
+                # circuit opened; do not let assemble_crawls call them merely
+                # "任务未完成".
+                with lock:
+                    for pending in rows:
+                        if pending.asin not in results_map:
+                            results_map[pending.asin] = CrawlResult(
+                                asin=pending.asin, run_id=run_id,
+                                marketplace=marketplace,
+                                product_url=pending.product_url,
+                                source_product_url=getattr(
+                                    pending, 'source_product_url', ''),
+                                status=PageStatus.CRAWL_ERROR,
+                                error=('batch_circuit_breaker: 残缺商品页达到阈值，'
+                                       '本表剩余行未继续请求'))
         finally:
             browser.quit()
             if archiver is not None:
@@ -1392,6 +1430,11 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     # Feedback stage; keep the interim state explicit rather than calling it a
     # successful Feedback result.
     feedback_report = _feedback_report_base('not_configured')
+    # Shared across all business sub-tables in this run.  A site-wide
+    # incomplete-page response must stop the next sub-table too; otherwise
+    # each sheet would independently spend minutes repeating the same failure.
+    cfg['_run_incomplete_count'] = [0]
+    cfg['_run_circuit_open'] = threading.Event()
     def save_bundle():
         frontend_counts = frontend_status_counts(
             [cr for values in results_by_sheet.values() for cr in values])
@@ -1454,6 +1497,8 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not args.dry_run and not args.fetch_only:
         store.save(selection.period_id, manifest)
     save_bundle()
+    cfg.pop('_run_incomplete_count', None)
+    cfg.pop('_run_circuit_open', None)
     error_ratio = summarize(results_by_sheet, cfg, logger)
     should_write = not args.dry_run and not args.fetch_only
     if error_ratio > cfg['max_error_ratio_for_push'] and not args.force_push:

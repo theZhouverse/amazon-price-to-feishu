@@ -419,6 +419,29 @@ class AmazonBrowser:
                     if (ac_badge.visible) break;
                 }
                 const clone = document.documentElement.cloneNode(true);
+                // A response can have the correct title/URL while the product
+                // detail application never renders (Amazon risk/resource
+                // degradation).  Keep a structural diagnostic with the same
+                // frozen DOM so the caller can fail fast instead of treating
+                // the shell as a normal "price missing" product.
+                const visibleNode = (selector) => {
+                    const node = document.querySelector(selector);
+                    return Boolean(node && visible(node));
+                };
+                const product_shell = {
+                    title: visibleNode('#productTitle,[data-feature-name="title"]'),
+                    main_image: visibleNode('#landingImage,#imgTagWrapperId img'),
+                    center: visibleNode('#centerCol,#dp-container,#ppd'),
+                    buybox: visibleNode('#buybox,#buyBoxAccordion'),
+                    // Do not count recommendation-card .a-price nodes as the
+                    // current product price; scope candidates to product
+                    // detail containers only.
+                    price: visibleNode('#corePrice_feature_div .a-price,' +
+                                      '#corePriceDisplay_desktop_feature_div .a-price,' +
+                                      '.priceToPay,.apex-pricetopay-value,' +
+                                      '#buybox .a-price'),
+                    availability: visibleNode('#availability,#availabilityInsideBuyBox_feature_div')
+                };
                 const selector = '[id*="corePrice"],.priceToPay,.apex-pricetopay-value,#buybox,[id*="coupon" i],[class*="coupon" i],.a-alert-content,.a-alert-container,.savingsPercentage,.apex-savings-percentage,#availability';
                 const live = document.documentElement.querySelectorAll(selector);
                 const copied = clone.querySelectorAll(selector);
@@ -429,7 +452,7 @@ class AmazonBrowser:
                 return {url:location.href,title:document.title,
                 asin:document.querySelector('#ASIN')?.value || '',
                 postal:document.querySelector('#glow-ingress-line2')?.innerText || '',
-                html:clone.outerHTML,ac_badge:ac_badge};''', timeout=budget(cfg['page_timeout']))
+                html:clone.outerHTML,ac_badge:ac_badge,product_shell:product_shell};''', timeout=budget(cfg['page_timeout']))
             budget(cfg['page_timeout'])
             cr.page_url, cr.page_title = sample['url'], sample['title'][:200]
             if any(k in cr.page_title.lower() for k in TITLE_404):
@@ -450,6 +473,19 @@ class AmazonBrowser:
             if not cr.location_verified:
                 cr.status = PageStatus.CRAWL_ERROR
                 cr.error = 'location_unverified: 当前商品页面邮编不匹配'
+                return cr
+            shell = sample.get('product_shell') or {}
+            # The document title and URL can survive an Amazon risk/resource
+            # downgrade while the actual product app is empty.  Require a
+            # price/buy-box anchor, or the normal title+image pair, before
+            # attempting price parsing; otherwise classify explicitly as a
+            # technical incomplete page.
+            shell_has_product = bool(shell.get('price') or shell.get('buybox') or
+                                     (shell.get('title') and shell.get('main_image')))
+            if shell and not shell_has_product:
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = ('incomplete_product_page: 商品详情结构未加载 '
+                            f'(shell={shell})')
                 return cr
             # Price parsing and all seven frontend checks consume this same
             # frozen DOM. No check is allowed to trigger another navigation.
@@ -480,7 +516,8 @@ class AmazonBrowser:
                     cr.status = PageStatus.SOLD_OUT
                 else:
                     cr.status = PageStatus.PARSE_ERROR
-                    cr.error = 'main_price_missing: 缺少可靠主价格或明确售罄证据'
+                    cr.error = ('main_price_missing: 缺少可靠主价格或明确售罄证据 '
+                                f'(shell={shell})')
                 return cr
             currencies = {observed_currency(c.raw_text, self.profile.currency_code)
                           for c in cands if c.value is not None}
@@ -571,6 +608,18 @@ class AmazonBrowser:
                 last.error = 'deadline_exceeded: 单 ASIN 总时间预算耗尽'
                 break
             st = last.status
+
+            if st == PageStatus.CRAWL_ERROR and (last.error or '').startswith(
+                    'incomplete_product_page'):
+                # A blank/risk shell is not a normal network retry.  Rebuild
+                # once to discard the session's stale document, with a short
+                # bounded pause; repeated shells are handled by the caller's
+                # circuit breaker instead of spending the full risk cooldown.
+                if attempts <= 1:
+                    self._sleep(random.uniform(1.0, 3.0))
+                    tab = self.rebuild(tab)
+                    continue
+                break
 
             if st in (PageStatus.OK, PageStatus.PAGE_NOT_FOUND):
                 break

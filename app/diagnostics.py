@@ -28,6 +28,9 @@ def save_evidence(run_id: str, sheet: str, cr: CrawlResult, tab, cfg: dict) -> P
                        for c in cr.price_candidates],
         'promotion_raw': cr.promotion_raw,
         'attempt_count': cr.attempt_count,
+        'diagnostic_class': ('incomplete_product_page'
+                             if (cr.error or '').startswith('incomplete_product_page')
+                             else ''),
         'saved_at': cr.timestamp,
     }
     with io.open(d / 'diagnostic.json', 'w', encoding='utf-8') as f:

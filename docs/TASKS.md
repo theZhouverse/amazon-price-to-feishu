@@ -1,5 +1,14 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 Amazon残缺商品页识别与子表熔断修复
+
+- [x] 根据 `20260911_073004` 全量证据确认 US/CA 均返回“正确标题/URL + 顶部导航/推荐卡 + 商品详情主体空白”的残缺页面；同一 ASIN 单条复测仍无主价候选，根因属于 Amazon 会话/出口的页面降级，不是链接、币种或价格公式。
+- [x] 在同一次冻结 DOM 快照中增加商品详情结构诊断：主价只统计 `corePrice`、`priceToPay`、Buy Box 等当前商品容器，不把推荐卡 `.a-price` 计为主价；缺少商品标题+主图、Buy Box 或当前商品主价时标记 `incomplete_product_page`，保存截图、shell 结构和诊断分类。
+- [x] 残缺页仅执行一次轻量 Tab 重建重试，不进入60～180秒风险冷却；同一子表连续8条触发子表熔断，未取行明确写入 `batch_circuit_breaker` 恢复清单，避免再次完整请求数百条空壳页面。
+- [x] 配置与示例新增 `incomplete_page_circuit_threshold=8`；等待时间试验已撤回，`price_wait_timeout` 保持12秒。
+- [x] 验证：`PYTHONPATH=app; .venv\\Scripts\\python.exe -m unittest discover -s tests -q`，338/338通过；US在线单条 `20260911_100819` 和 CA在线单条 `20260911_101439` 均在新逻辑下改判为 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；CA样本 `B0D9NT9JQN` 的 `amazon.ca`、CAD和邮编验证均保留。
+
+
 ## 2026-09-11 明早生产运行前完整检查与调度修复（最新）
 
 - [x] 发现实际Windows入口仍只有两个“周一至周五”任务，且`hidden_ps1.vbs`不转发附加参数、`scheduled_run.ps1`未传`--scheduled-slot`；历史07:30任务因此以`manual`模式运行，2026-09-10 07:30 summary中的`source_period_id/scheduled_slot/selection_mode`为空，Feedback也会因非07:30逻辑槽位被跳过。
