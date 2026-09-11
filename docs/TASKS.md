@@ -1,5 +1,12 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 恢复 Windows 周一至周五自动任务（当前运行态）
+
+- [x] 按用户确认启用 `AmazonDaily_0730`、`AmazonDaily_0730_weekday`、`AmazonDaily_1530`、`AmazonDaily_1530_weekday` 四个任务；任务定义未重建、未手动立即触发。
+- [x] 管理员回读：四条任务均为 `State=Ready`、`Enabled=True`。周一任务下次运行时间为 `2026-09-14 07:30` 和 `2026-09-14 15:30`；工作日任务下次运行时间为 `2026-09-15 07:30` 和 `2026-09-15 15:30`。
+- [x] 四条任务继续通过 `wscript.exe //B //NoLogo` → `bin/hidden_ps1.vbs` → `bin/scheduled_run.ps1` 启动，运行参数分别为 `monday_0730`、`weekday_0730`、`monday_1530`、`weekday_1530`，不会弹出可见终端窗口。
+- [x] 启用前已完成代码入口、25项前端专项、361项完整离线测试和一次 `--weekly-run --dry-run --limit 1` 真实只读链路验证；真实 dry-run 仍有页面身份不一致和源数据无效行，程序会阻断并留证，不影响调度器启动。
+
 ## 2026-09-11 BSR当前DOM可见性与详情表边界修正（最新）
 
 - [x] 复核历史 `B0DQTFFRCN`：`Best Sellers Rank` 位于当前商品 `#prodDetails` 下的一张 `.a-keyvalue.prodDetTable` 中，同表 `ASIN` 行为 `B0DQTFFRCN`，不是推荐商品或其他 ASIN；但其祖先 `.a-expander-content` 为 `style="display:none"`、`data-expanded="false"`，当前页面实际没有显示 BSR。

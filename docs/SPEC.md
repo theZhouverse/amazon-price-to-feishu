@@ -538,7 +538,7 @@ $env:PYTHONPATH='app'
 
 当前账号为Interactive：需电脑开机且账号已登录；不需GPT窗口。任务Hidden=true、Execute=wscript.exe、WScript批处理模式与PowerShell WindowStyle=Hidden共同保证不创建可见终端；用户不能因关闭控制台误停。StartWhenAvailable=true，开机或恢复后补触发错过时段，入口必须把原定`scheduled_slot`继续传给Python，不能按实际补跑时间重新判断来源；整批锁与IgnoreNew共同防重叠。日志使用UTF-8保存开始/结束、退出码和`scheduled_slot`。安装脚本bin/schedule.ps1创建上述四条时段任务；若安装前两个15:30任务处于禁用状态，重装必须保持下午整组禁用，不得因修复早间任务静默恢复下午执行。不操作HTML服务或防火墙，不另装重复调度器。
 
-在价格/位置策略改造、在线A/B和最小回归未完成前，四条`AmazonDaily_*`任务必须全部处于`Enabled=false`/`State=Disabled`，避免旧的邮编逻辑在后台触发；暂停属于运行态控制，不删除任务定义。只有代码、配置、文档、离线回归及CA/US只读样本验收完成后，才可按用户明确指令恢复相应时段，并在恢复前回读任务状态和`ca_location_mode`。
+在价格/位置策略改造、在线A/B和最小回归未完成前，四条`AmazonDaily_*`任务必须全部处于`Enabled=false`/`State=Disabled`，避免旧的邮编逻辑在后台触发；暂停属于运行态控制，不删除任务定义。代码、配置、文档、离线回归及CA/US只读样本验收完成后，可按用户明确指令恢复相应时段，并在恢复前回读任务状态和`ca_location_mode`。当前已按用户指令恢复周一至周五两个时段，四条任务均应为`State=Ready`/`Enabled=true`；下周一由`AmazonDaily_0730`在07:30执行上一周期来源，由`AmazonDaily_1530`在15:30读取最新登记链接并切换本周来源，周二至周五使用两个`*_weekday`任务。
 
 调度时段与来源周期必须按第16.1节解释：周一07:30只运行上一周期的`monday_carryover`，周一15:30执行`monday_switch`并要求登记表已有更高的最新有效序号，周二至周五07:30/15:30运行`weekday_steady`并复用周一15:30固化的本周manifest。`StartWhenAvailable`导致周一07:30延迟补跑时仍保持该时段的上周来源规则；如果错过周一15:30，不能将补跑伪装成周一早间，必须记录实际`selection_mode`并在没有最新周报时停止。
 
