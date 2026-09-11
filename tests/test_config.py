@@ -86,6 +86,7 @@ class TestConfigSources(unittest.TestCase):
                 'AMAZON_HTML_ARCHIVE_ENABLED': 'true',
                 'AMAZON_HTML_SERVER_PORT': '9876',
                 'AMAZON_WORKERS': '2',
+                'AMAZON_FEEDBACK_ENABLED': 'false',
             }
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, env, clear=True):
@@ -94,6 +95,7 @@ class TestConfigSources(unittest.TestCase):
             self.assertTrue(cfg['html_archive_enabled'])
             self.assertEqual(cfg['html_server_port'], 9876)
             self.assertEqual(cfg['workers'], 2)
+            self.assertFalse(cfg['feedback']['enabled'])
 
     def test_invalid_runtime_boolean_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
@@ -101,6 +103,15 @@ class TestConfigSources(unittest.TestCase):
             path = self._write_config(root)
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, {'AMAZON_HTML_ARCHIVE_ENABLED': 'maybe'}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, '必须是布尔值'):
+                    config_mod.load_config(path)
+
+    def test_invalid_feedback_runtime_boolean_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            path = self._write_config(root)
+            with patch.object(config_mod, 'PROJECT_ROOT', root), \
+                    patch.dict(os.environ, {'AMAZON_FEEDBACK_ENABLED': 'maybe'}, clear=True):
                 with self.assertRaisesRegex(RuntimeError, '必须是布尔值'):
                     config_mod.load_config(path)
 

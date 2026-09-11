@@ -34,9 +34,16 @@ DEFAULTS = {
     'retry': 2,                       # 技术失败重试次数
     'incomplete_page_circuit_threshold': 8,  # 残缺商品页连续达阈值后中断当表
     'save_every': 10,                 # 每 N 条原子保存一次缓存
-    'us_zip': '90210',                # 兼容旧配置名；语义为 US postal code
+    'us_zip': '90210',                # 仅兼容旧配置；proxy 模式下不会使用
+    'us_location_mode': 'proxy',     # US: proxy=依赖出口IP；postal=兼容旧方案
+    'ca_location_mode': 'postal',    # CA: 默认独立加拿大邮编页面校验
     'ca_postal': 'M5V 3A8',
     'proxy': '',                      # 显式浏览器代理；留空使用固定 VPN，不自动读取系统代理
+    # 浏览器启动兼容性：Chrome 136+/152 + DrissionPage 4.1.1.4 需要独立
+    # CDP 端口；当前 Windows 主机必须启用 no-sandbox/disable-gpu 才能稳定启动。
+    'browser_auto_port': True,
+    'browser_no_sandbox': True,
+    'browser_disable_gpu': True,
     # HTML 归档（独立于代码产物，默认位于项目同级约定目录）
     'html_archive_root': str(PROJECT_ROOT / 'htmls'),
     'html_retention_days': 5,
@@ -164,9 +171,9 @@ def load_config(config_path: Path | None = None) -> dict:
             )
         cfg.update({k: v for k, v in user.items() if v is not None})
 
-    # Container/portable deployments may keep one checked-in config file while
-    # changing only machine-local paths and feature switches at runtime.  Keep
-    # this deliberately small and explicit: arbitrary environment-to-config
+    # The Windows host may keep one checked-in config file while changing only
+    # machine-local paths and feature switches at runtime. Keep this mapping
+    # deliberately small and explicit: arbitrary environment-to-config
     # mapping would make production behavior difficult to audit.
     env_overrides = {
         'html_archive_root': 'AMAZON_HTML_ARCHIVE_ROOT',
@@ -176,16 +183,27 @@ def load_config(config_path: Path | None = None) -> dict:
         'html_archive_required': 'AMAZON_HTML_ARCHIVE_REQUIRED',
         'html_server_enabled': 'AMAZON_HTML_SERVER_ENABLED',
         'workers': 'AMAZON_WORKERS',
+        # Amazon浏览器代理必须显式声明；不自动继承通用HTTP_PROXY，避免
+        # 调度环境因其他工具的代理变量而悄然切换出口。
+        'proxy': 'AMAZON_PROXY',
+        # 允许本机计划任务按运行环境明确开关 Feedback，避免复制一份
+        # 容易漂移的 config.json；宿主机生产仍须使用经过验收的紫鸟会话。
+        'feedback_enabled': 'AMAZON_FEEDBACK_ENABLED',
     }
     for key, env_name in env_overrides.items():
         raw = os.environ.get(env_name)
         if raw is None or not raw.strip():
             continue
-        if key in {'html_archive_enabled', 'html_archive_required', 'html_server_enabled'}:
+        if key in {'html_archive_enabled', 'html_archive_required', 'html_server_enabled',
+                   'feedback_enabled'}:
             lowered = raw.strip().lower()
             if lowered not in {'1', '0', 'true', 'false', 'yes', 'no', 'on', 'off'}:
                 raise RuntimeError(f'环境变量 {env_name} 必须是布尔值')
-            cfg[key] = lowered in {'1', 'true', 'yes', 'on'}
+            value = lowered in {'1', 'true', 'yes', 'on'}
+            if key == 'feedback_enabled':
+                cfg.setdefault('feedback', {})['enabled'] = value
+            else:
+                cfg[key] = value
         elif key in {'html_server_port', 'workers'}:
             try:
                 cfg[key] = int(raw.strip())
@@ -265,6 +283,9 @@ def validate(cfg: dict) -> None:
         raise RuntimeError('risk_cooldown_max 不能小于 risk_cooldown_min')
     if cfg['per_asin_timeout'] < cfg['page_timeout']:
         raise RuntimeError('per_asin_timeout 不能小于 page_timeout')
+    for key in ('us_location_mode', 'ca_location_mode'):
+        if str(cfg.get(key) or '').strip().lower() not in {'proxy', 'postal'}:
+            raise RuntimeError(f'{key} 只能是 proxy 或 postal')
     if not cfg['feishu_app_id']:
         raise RuntimeError('feishu_app_id 不能为空')
     if not isinstance(cfg.get('feishu_allowed_hosts'), list) or not cfg['feishu_allowed_hosts']:
@@ -282,7 +303,8 @@ def validate(cfg: dict) -> None:
         raise RuntimeError('feishu_output_headers 必须正好 6 列')
     if not isinstance(cfg.get('html_archive_root'), str) or not cfg['html_archive_root'].strip():
         raise RuntimeError('html_archive_root 必须是非空路径')
-    for key in ('html_archive_enabled', 'html_archive_required', 'html_server_enabled'):
+    for key in ('html_archive_enabled', 'html_archive_required', 'html_server_enabled',
+                'browser_auto_port', 'browser_no_sandbox', 'browser_disable_gpu'):
         if not isinstance(cfg.get(key), bool):
             raise RuntimeError(f'{key} 必须是布尔值')
     if not isinstance(cfg.get('html_server_bind'), str) or not cfg['html_server_bind'].strip():

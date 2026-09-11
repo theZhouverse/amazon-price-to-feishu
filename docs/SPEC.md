@@ -51,7 +51,7 @@ flowchart TD
     F --> J[按子表Marketplace抓取；一个浏览器最多四个商品Tab]
     I --> J
     J --> K[PD等使用amazon.com和USD；CPD使用amazon.ca和CAD]
-    K --> L[原子读取URL和ASIN及邮编和页面DOM；主价、促销和前端检查共用页面证据]
+    K --> L[原子读取URL和ASIN及站点位置上下文和页面DOM；主价、促销和前端检查共用页面证据]
     L --> L0{商品详情结构完整?}
     L0 -- 否 --> L0a[记录incomplete_product_page；轻量重建Tab重试一次]
     L0a --> L0b{同子表残缺页达到8条?}
@@ -319,26 +319,28 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 
 ## 9. 浏览器、节奏与超时
 
-正式配置workers=4；每次处理一个子表/Marketplace，使用一个浏览器、最多4个互斥商品Tab，而不是4个浏览器。商品不足4个时减少Tab。US/CA上下文分别初始化，不并发混用邮编。
+正式配置workers=4；每次处理一个子表/Marketplace，使用一个浏览器、最多4个互斥商品Tab，而不是4个浏览器。商品不足4个时减少Tab。US/CA上下文分别初始化，不并发混用站点位置策略。浏览器不得固定过期 User-Agent；必须使用当前 Chromium 原生版本（或在浏览器升级时同步更新并完成 US/CA 在线样本验收），避免 Amazon 因 UA 与实际内核不一致返回残缺商品壳。
 
 当前配置：page_timeout=30秒、price_wait_timeout=12秒、per_asin_timeout=90秒、retry=2；风险冷却配置60～180秒；同一子表连续8条残缺商品页触发熔断，避免在 Amazon 风控/资源降级时继续空跑。程序对Captcha、访问受限和429/503记录风险，不自动切换VPN/IP，也不绕过验证码。飞书 Drive 创建周报副本遇到408/429/5xx或传输超时时最多退避重试3次；每次重试前按精确副本名称回查根目录，避免超时后服务端已成功而客户端重复创建。
 
 每个CLI入口（人工、定时、恢复及维护）由Python持有同一个outputs/weekly_scheduler.lock，覆盖准备、抓取、发布、通知全过程。PowerShell仅负责启动与日志，不重复占锁；已有任务时第二个入口以75退出，不改变云端状态。调度包装器必须保留Python真实退出码，并在异常和非零退出时仍写入`END`收口行；锁文件残留不代表进程仍存活，OS释放锁后可重启。
 
-每个商品完成或失败后等待随机1～3秒再释放Tab，HTML关闭也执行；HTML开启时归档结束后只等待一次。复用post_archive_delay_min/max配置及post_archive_delay_seconds日志字段，不增加另一组重复配置。导航、身份或解析失败需要重试时必须关闭并重建当前Tab，不能让下一次请求继承上一商品页面；重建后的Tab仍由同一worker独占并最终归还池。`tab.get()`明确返回失败时必须标记`navigation_failed`并停止读取；不得在导航失败后解析旧DOM。
+每个商品完成或失败后等待随机1～3秒再释放Tab，HTML关闭也执行；HTML开启时归档结束后只等待一次。复用post_archive_delay_min/max配置及post_archive_delay_seconds日志字段，不增加另一组重复配置。导航、身份或解析失败需要重试时必须关闭并重建当前Tab，不能让下一次请求继承上一商品页面；重建后的Tab仍由同一worker独占并最终归还池。
 
-导航、文档/价格等待、页面脚本读取和稳定等待按剩余deadline裁剪；禁用导航内部重试，重试只由外层统一执行，每次直接重新导航，不插入额外无预算refresh/rebuild。`doc_loaded()`抛出异常或显式返回`False`时必须标记`navigation_timeout`并停止读取，不能继续读取`location.href`或价格。返回成功前复查截止时间，超时清除价格并标记deadline_exceeded。初始化首页timeout为30秒（不是30000秒）。商品间1～3秒等待不计入90秒抓取预算；浏览器驱动/操作系统失去响应仍不是进程级强制终止保障，不能宣称任何环境下墙钟严格90秒。
+导航、文档/价格等待、页面脚本读取和稳定等待按剩余deadline裁剪；禁用导航内部重试，重试只由外层统一执行，每次直接重新导航，不插入额外无预算refresh/rebuild。DrissionPage的`tab.get()`或`doc_loaded()`可能在URL已经切换到目标页时因等待超时返回`False`：此时只有在当前Tab URL同时满足目标Marketplace域名和请求ASIN时才允许继续，后续仍必须执行页面元数据、最终URL/ASIN、页面结构和DOM身份门禁；URL为空、站点不符、ASIN不符或Chrome `chrome-error://`错误页必须立即标记`navigation_failed`/`navigation_timeout`并停止读取，不能解析旧DOM。商品页动态主体等待只能使用当前商品区域（标题、主图、Buy Box、主价或可用性），不得使用全页面任意`.a-price`，防止推荐卡提前满足等待条件；地址弹窗输入框和提交按钮按有限轮询等待异步渲染，不能用单次固定短sleep判定`postal_input_not_found`。返回成功前复查截止时间，超时清除价格并标记deadline_exceeded。初始化首页timeout为30秒（不是30000秒）。商品间1～3秒等待不计入90秒抓取预算；浏览器驱动/操作系统失去响应仍不是进程级强制终止保障，不能宣称任何环境下墙钟严格90秒。
+
+浏览器启动兼容与诊断：`browser_auto_port=true`时为每次浏览器会话在受控本地端口范围内分配独立CDP端口，禁止复用残留的固定9222会话；当前Chrome 136+/152与DrissionPage 4.1.1.4组合必须带`--remote-allow-origins=*`，本机已验证需要`--disable-gpu`和`--no-sandbox`才能稳定建立CDP连接，三项均可由配置关闭后在迁移设备重新验收。不得固定过期User-Agent，使用本机Chromium原生版本。浏览器启动日志必须记录`stage`、Marketplace、headless、auto_port、no_sandbox、disable_gpu、是否显式代理、脱敏启动参数、CDP address、browser version和耗时；setup日志记录目标首页导航返回值、观察到的URL/host、位置模式/验证方法和失败原因；商品导航日志记录`tab.get`/`doc_loaded`返回False时的观察URL、ASIN绑定结果和Chrome错误页。日志不得保存Secret、Cookie、Authorization或完整代理凭证。
 
 ## 10. 多站点、ASIN和币种
 
-| 路由 | 域名 | 币种 | 邮编 |
+| 路由 | 域名 | 币种 | 位置上下文 |
 |---|---|---|---|
-| PD/XD/PDF等US映射 | www.amazon.com | USD | 90210 |
-| CPD对应CA映射 | www.amazon.ca | CAD | M5V 3A8 |
+| PD/XD/PDF等US映射 | www.amazon.com | USD | `proxy`：使用实际代理/VPN出口；不注入固定US邮编 |
+| CPD对应CA映射 | www.amazon.ca | CAD | `postal`：独立使用M5V 3A8页面校验 |
 
-复用同一抓取、解析、计算及写入代码，不复制一套CPD爬虫。CA邮编设置使用M5V、3A8两段；只有页面实际截断为五位时允许visible_prefix5证据，若页面含完整六位则必须完整匹配，M5V3A9不能通过M5V3A8校验；US仍要求完整邮编匹配。链接审计与源行读取统一处理裸ASIN、商品URL及富链接，避免审计通过后商品被解析器静默跳过。
+复用同一抓取、解析、计算及写入代码，不复制一套CPD爬虫。US默认`us_location_mode=proxy`，不读取或覆盖`us_zip`兼容配置，也不打开地址弹窗；位置由紫鸟/VPN或显式浏览器代理的实际出口负责，商品页最终host仍必须是`amazon.com`。若需给自动化指定代理，使用配置`proxy`或环境变量`AMAZON_PROXY`（`host:port`）；不得把通用`HTTP_PROXY/HTTPS_PROXY`静默当作Amazon出口。CA默认`ca_location_mode=postal`，邮编设置使用M5V、3A8两段；只有页面实际截断为五位时允许visible_prefix5证据，若页面含完整六位则必须完整匹配，M5V3A9不能通过M5V3A8校验。邮编只作为页面位置上下文，不拼接到商品URL；链接审计与源行读取统一处理裸ASIN、商品URL及富链接，避免审计通过后商品被解析器静默跳过。
 
-正式setup强制邮编验证，失败时该子表不采信价格；fetch_once也校验location_verified。正常商品页最终host必须匹配目标站点，并从主价原始文本读取币种：US$/USD与CA$/CAD不能互相替代；裸$仅在已验证站点和邮编上下文下解释。币种未知/冲突为currency_error，不参与价格比较。
+正式setup强制位置上下文验证：US proxy模式记录`proxy_egress`并不触碰邮编；CA postal模式必须成功回读加拿大邮编。失败时该子表不采信价格；fetch_once也校验location_verified。正常商品页最终host必须匹配目标站点，并从主价原始文本读取币种：US$/USD与CA$/CAD不能互相替代；裸$仅在已验证站点上下文下解释。币种未知/冲突为currency_error，不参与价格比较。
 
 ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式。源快照发现阶段允许业务表头写成`ASIN`或带换行/括号说明的`ASIN\n(...)`，但不把`ASIN_CODE`等普通字段误认作ASIN列。显式URL先验证精确host和Marketplace，拒绝恶意子域、非Amazon和跨站URL；坏URL不能退回显示文字中的ASIN绕过检查。源单元格中的合法Amazon链接必须同时保存为`source_product_url`，并优先作为请求链接使用，以保留`?th=1`、`?psc=1`等变体上下文；纯ASIN或无显式链接时才回退标准输出：`https://www.amazon.com/dp/{ASIN}` 或 `https://www.amazon.ca/dp/{ASIN}`。源链接ASIN必须与ASIN列一致，否则该行无效并进入审计。
 
@@ -391,15 +393,15 @@ ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式�
 - 动态查询应用协作者、按Open ID去重并包含周成业。逐人发送，一人失败继续其他人；名单查询失败仅通知管理员并记录群发不完整。
 - 一批一次全量汇总，不逐子表推送。运行/投递问题另通知周成业；发送成功不等于已读，应用协作者不自动等于文档协作者。
 
-## 14. Docker部署边界
+## 14. Windows宿主机本地部署（唯一生产方式）
 
-Docker是价格任务的可选部署方式，不改变业务流程和固定结果表身份。当前已准备可构建的PoC骨架，但开发机未安装Docker CLI，尚未把镜像构建、Chromium无头、Amazon出口或容器cron称为实机验收通过。价格任务默认关闭HTML，HTML服务/归档与价格任务保持独立。
+生产环境只支持 Windows 宿主机本地运行，不交付、不维护 Dockerfile、Compose、容器入口或容器迁移方案。程序直接使用宿主机 `.venv`、本机 Chromium/DrissionPage、已授权的紫鸟/ZClaw 会话和本机文件系统；固定结果表、源登记表、Feedback 和通知均由同一宿主机进程完成。不得同时启用第二套调度器，也不得以 Docker 或容器替换 Windows 计划任务。
 
-Docker镜像必须持久化 `outputs`、`data` 和可选的 `htmls` 卷；Secret只通过运行时环境变量或未提交的`.env`注入；时区固定 `Asia/Shanghai`；cron只在容器内运行周一至周五07:30/15:30。Windows任务计划和容器cron不得同时启用同一份结果表。
+宿主机部署必须先创建项目 `.venv` 并安装锁定依赖，复制不含 Secret 的 `config/config.json` 模板；真实 `FS_APP_SECRET` 只通过项目根目录未提交的 `.env` 或受控系统环境变量注入。运行数据持久化在项目根目录的 `outputs/`、`data/`、`tmp/` 及按需启用的 `htmls/`，这些目录不能被当作普通缓存整体删除。HTML 归档/服务仍独立于价格流程，当前配置关闭时不得因其缺失阻断价格任务。
 
-为支持跨设备迁移，配置加载允许显式环境变量覆盖少量机器相关项：`AMAZON_HTML_ARCHIVE_ROOT`、`AMAZON_HTML_ARCHIVE_ENABLED`、`AMAZON_HTML_ARCHIVE_REQUIRED`、`AMAZON_HTML_SERVER_ENABLED`、`AMAZON_HTML_SERVER_BIND`、`AMAZON_HTML_SERVER_PORT`、`AMAZON_WORKERS`。未知环境变量不参与配置，避免隐藏逻辑。容器内HTML路径必须是POSIX路径（推荐`/app/htmls`），不能沿用Windows盘符。
+Amazon 出口必须显式来自 `config.proxy` 或 `AMAZON_PROXY`，或来自已经在本机浏览器中验证的紫鸟/VPN出口；程序不自动继承通用 `HTTP_PROXY/HTTPS_PROXY`。允许的宿主机运行时覆盖包括 `AMAZON_HTML_ARCHIVE_ROOT`、`AMAZON_HTML_ARCHIVE_ENABLED`、`AMAZON_HTML_ARCHIVE_REQUIRED`、`AMAZON_HTML_SERVER_ENABLED`、`AMAZON_HTML_SERVER_BIND`、`AMAZON_HTML_SERVER_PORT`、`AMAZON_WORKERS`、`AMAZON_PROXY` 和 `AMAZON_FEEDBACK_ENABLED`；未知环境变量不得改变配置。`AMAZON_FEEDBACK_ENABLED` 仅是本机运行开关，启用前必须确认两店紫鸟会话、固定 Feedback Sheet 和选择器均已登记并通过只读验收。
 
-迁移前先停止旧调度器并确认没有运行锁；复制代码及持久化卷，不复制`.venv`、缓存或临时文件；新设备先执行只读登记检查和`--weekly-run --dry-run --limit 1`，核对源快照、US/CA出口、币种、日志和健康检查后再正式写入。Amazon数据中心出口、DrissionPage/Chromium、CA邮编和网络风控仍需目标设备在线验证。完整命令、回滚和风险见 `deploy/docker/README.md`。
+跨设备迁移时先停用旧 Windows 计划任务并确认没有 `weekly_scheduler.lock`，再复制代码和经过筛选的 `outputs/`、`data/`、`htmls/` 运行数据；不要复制 `.venv`、`.git`、`.env`、浏览器缓存或临时目录。新宿主机必须重新创建 `.venv`、注入 Secret、确认 Chromium/紫鸟、代理和 CA 邮编环境，依次执行离线回归、登记表只读检查、US/CA 单点、`--weekly-run --dry-run --limit 1` 和最小写入回读，全部通过后才启用新的隐藏计划任务。迁移不能把旧机器的浏览器会话、代理出口或任务注册状态视为已迁移。
 
 ## 15. Secret和资源权限
 
@@ -525,7 +527,7 @@ $env:PYTHONPATH='app'
 
 ### 19.1 部署
 
-建立.venv并安装config/requirements.txt，按第3节注入Secret，保留本机JSON和资源登记。先离线测试、只读资源检查、US/CA最小样本、最小表，再全量。不依赖固定美国出口即可满足CA；须实际验证各站邮编和币种。
+建立.venv并安装config/requirements.txt，按第3节注入Secret，保留本机JSON和资源登记。先离线测试、只读资源检查、US/CA最小样本、最小表，再全量。US使用实际代理/VPN出口，不依赖固定示例邮编；CA按`amazon.ca`与独立加拿大位置上下文验收，并分别验证站点和币种。
 
 ### 19.2 每天两次与周一换周
 
@@ -541,7 +543,7 @@ $env:PYTHONPATH='app'
 
 ### 19.3 验收顺序
 
-离线回归（含A:V列布局、七项前端检查、Feedback评级`<=3`、首次7日/后续3日窗口、近10日清理、二级订单详情、分页【下一个】、两店串行、风控停机、去重替身、周一早间沿用和周一下午切换规则）→ 登记表及云端只读核对 → US/CA样本及前端证据 → 最小商品子表写入 → 两店铺Feedback慢速只读分页与二级详情读取 → 固定子表9列写入/近10日清理/整表回读 → 全量 → 至少一周工作日双时段稳定性、失败恢复和“周一07:30上周/周一15:30本周/周二至周五本周”来源验收 → 再评估Docker。
+离线回归（含A:V列布局、七项前端检查、Feedback评级`<=3`、首次7日/后续3日窗口、近10日清理、二级订单详情、分页【下一个】、两店串行、风控停机、去重替身、周一早间沿用和周一下午切换规则）→ 登记表及云端只读核对 → US/CA样本及前端证据 → 最小商品子表写入 → 两店铺Feedback慢速只读分页与二级详情读取 → 固定子表9列写入/近10日清理/整表回读 → 全量 → 至少一周工作日双时段稳定性、失败恢复和“周一07:30上周/周一15:30本周/周二至周五本周”来源验收 → 宿主机隐藏计划任务连续运行验收。
 
 价格和前端检查验收不要求HTML下载或端口；独立HTML恢复另行断网验收。真实首次A:V列迁移、Feedback首次7日窗口、两个店铺后台登录/身份核验、评级`<=3`分页、订单二级详情、固定子表9列写入和近10日清理、后续3日增量、周一早间复用上一周期、周一下午切换新周期、下一周工作日稳态复用及全员通知须留存对应实际证据，不能以离线测试打勾。所有测试耗时写TASKS。
 

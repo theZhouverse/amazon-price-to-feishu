@@ -38,10 +38,6 @@ from frontend_checks import (
 from models import CrawlResult, PageStatus, ReportRow
 from product_links import MARKETPLACES, MarketplaceProfile
 
-DEFAULT_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
-
-
 class AmazonBrowser:
     """单浏览器 + tab 池。
 
@@ -53,12 +49,31 @@ class AmazonBrowser:
 
     def __init__(self, headless: bool = True, us_zip: str = '90210',
                  proxy: str | None = None, tabs: int = 1,
-                 marketplace: str = 'US', postal_code: str | None = None):
+                 marketplace: str = 'US', postal_code: str | None = None,
+                 location_mode: str | None = None,
+                 browser_auto_port: bool = True,
+                 browser_no_sandbox: bool = True,
+                 browser_disable_gpu: bool = True,
+                 logger=None):
+        self.logger = logger
+        self.page = None
+        self.browser_startup_stage = 'options'
+        self.browser_startup_started = time.monotonic()
         if marketplace not in MARKETPLACES:
             raise RuntimeError(f'未知 Marketplace: {marketplace}')
         self.profile: MarketplaceProfile = MARKETPLACES[marketplace]
         self.marketplace = marketplace
-        self.postal_code = postal_code or us_zip
+        # US 默认信任已配置的代理/固定 VPN 出口，不再把示例邮编 90210
+        # 注入 Amazon 地址组件。CA 默认仍使用独立的加拿大邮编上下文。
+        self.location_mode = (location_mode or
+                              ('postal' if marketplace == 'CA' else 'proxy')).strip().lower()
+        if self.location_mode not in {'proxy', 'postal'}:
+            raise RuntimeError(f'未知 location_mode: {self.location_mode}')
+        if self.location_mode == 'postal':
+            self.postal_code = (postal_code or
+                                (us_zip if marketplace == 'US' else '')).strip()
+        else:
+            self.postal_code = ''
         self.location_verified = False
         self.location_error = ''
         self.location_verification_method = ''
@@ -67,18 +82,64 @@ class AmazonBrowser:
         # 不自动继承 HTTP_PROXY/HTTPS_PROXY，避免意外切换出口。
         self.proxy = proxy
         co = ChromiumOptions()
+        # 旧配置固定 9222 且 auto_port=False；异常退出后会留下孤儿浏览器，
+        # 下一轮可能连接到错误会话。每个任务使用受控随机本地端口，避免串会话。
+        if browser_auto_port:
+            co.auto_port(True, scope=(9222, 19222))
         co.set_argument('--disable-blink-features=AutomationControlled')
+        # Chrome 136+（本机当前 152）默认拒绝非浏览器来源的 CDP WebSocket；
+        # DrissionPage 4.1.1.4 需要显式放行本机调试连接，否则会在构造
+        # ChromiumPage 时收到 403，表现为 PageDisconnected/FrameTree timeout。
+        co.set_argument('--remote-allow-origins=*')
+        # 当前 Windows 主机的 Chrome 152 在管理员/无头启动时会让 GPU 子进程
+        # 崩溃。disable-gpu 避免 GPU 进程，而 no-sandbox 是该主机上唯一已验证
+        # 能让 CDP 建立连接的兼容选项；两项均可由配置关闭，便于迁移到已有
+        # 沙箱策略的机器。不得再使用已验证会卡住的 --in-process-gpu。
+        if browser_disable_gpu:
+            co.set_argument('--disable-gpu')
+        if browser_no_sandbox:
+            co.set_argument('--no-sandbox')
         co.set_argument('--start-maximized')
         language = 'en-CA,en' if marketplace == 'CA' else 'en-US,en'
         co.set_argument(f'--lang={language}')
-        co.set_argument(f'--user-agent={DEFAULT_UA}')
+        # 不覆盖 Chromium 的原生 User-Agent。固定 Chrome/124 会随着本机
+        # Chrome 升级而过期；使用浏览器自身 UA 可保持版本同步。
         if headless:
             co.headless(True)
         if self.proxy:
             # 注意：set_proxy 需要 'host:port' 格式（不带协议和尾斜杠），
             # 否则 Chrome 不生效会加载离线页（dino）
             co.set_proxy(self.proxy)
-        self.page = ChromiumPage(co)
+        self._log('info',
+                  '启动浏览器 stage=options '
+                  f'marketplace={marketplace} headless={headless} '
+                  f'auto_port={browser_auto_port} no_sandbox={browser_no_sandbox} '
+                  f'disable_gpu={browser_disable_gpu} proxy_configured={bool(self.proxy)} '
+                  f'args={self._safe_args(co.arguments)}')
+        self.browser_startup_stage = 'cdp_connect'
+        try:
+            self.page = ChromiumPage(co)
+            self.browser_startup_stage = 'connected'
+            elapsed_ms = int((time.monotonic() - self.browser_startup_started) * 1000)
+            self._log('info',
+                      '浏览器启动成功 '
+                      f'address={getattr(co, "address", "")} '
+                      f'browser_path={getattr(co, "browser_path", "")} '
+                      f'version={getattr(getattr(self.page, "browser", None), "version", "")} '
+                      f'elapsed_ms={elapsed_ms}')
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - self.browser_startup_started) * 1000)
+            self.browser_startup_stage = 'failed'
+            self._log('error',
+                      '浏览器启动失败 '
+                      f'stage=cdp_connect error={type(exc).__name__}: {str(exc)[:240]} '
+                      f'elapsed_ms={elapsed_ms} args={self._safe_args(co.arguments)}')
+            if self.page is not None:
+                try:
+                    self.page.quit()
+                except Exception:
+                    pass
+            raise
         self._lock = threading.Lock()
         self._free: list = []      # 空闲 tab
         self._live: set = set()    # 存活 tab 的 id
@@ -88,6 +149,59 @@ class AmazonBrowser:
             tab = self._create_tab()
             self._free.append(tab)
         self._inited = False
+
+    def _log(self, level: str, message: str) -> None:
+        """把浏览器启动/初始化诊断写入统一运行日志；无 logger 时兼容 CLI。"""
+        text = f'[browser] {message}'
+        logger = getattr(self, 'logger', None)
+        handler = getattr(logger, level, None) if logger is not None else None
+        if callable(handler):
+            handler(text)
+        else:
+            print(text, flush=True)
+
+    @staticmethod
+    def _safe_args(args) -> str:
+        """记录启动参数但隐藏自动生成的用户目录路径。"""
+        values = []
+        for value in list(args or []):
+            value = str(value)
+            if value.startswith('--user-data-dir='):
+                value = '--user-data-dir=<managed>'
+            elif value.startswith('--proxy-server='):
+                # Do not put a proxy host, username or password into the
+                # persistent run log.  The separate proxy_configured boolean
+                # is enough to explain routing; credentials must stay in the
+                # runtime environment/configuration secret boundary.
+                value = '--proxy-server=<configured>'
+            values.append(value)
+        return repr(values)
+
+    def _url_matches_request(self, url: str, asin: str) -> bool:
+        """Return True only when *url* is the requested ASIN on this marketplace.
+
+        This guard is intentionally independent of DOM state.  DrissionPage may
+        report ``get()``/``doc_loaded()`` as False while the browser URL has
+        already changed; accepting that state is safe only when both the target
+        host and the requested ASIN are visible in the URL.  A blank URL, a
+        different ASIN, or a cross-marketplace redirect is rejected so a tab's
+        previous page cannot be parsed accidentally.
+        """
+        if not isinstance(url, str) or not url:
+            return False
+        host = (urlsplit(url).hostname or '').lower()
+        target = getattr(getattr(self, 'profile', None), 'domain', '')
+        if host not in {target.lower(), f'www.{target.lower()}'}:
+            return False
+        identity = re.search(
+            r'/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)', url,
+            re.IGNORECASE)
+        return bool(identity and identity.group(1).upper() == str(asin).upper())
+
+    @staticmethod
+    def _is_browser_error_url(url: str) -> bool:
+        """识别 Chrome 内置错误页，避免把它归类成 ASIN 身份错配。"""
+        return isinstance(url, str) and url.lower().startswith('chrome-error://')
 
     # ---------- tab 池 ----------
     def _create_tab(self):
@@ -126,45 +240,113 @@ class AmazonBrowser:
 
     # ---------- 初始化 ----------
     def setup(self, strict_location: bool = True) -> bool:
-        """初始化三要素（URL + zip cookie），cookie 浏览器级共享，一次即可。失败返回 False"""
+        """初始化站点和位置上下文，失败返回 False。
+
+        location_mode=proxy（默认 US）不触碰地址弹窗或邮编 cookie，位置由
+        浏览器实际代理/VPN出口决定；location_mode=postal（默认 CA）才设置并
+        回读对应站点的邮编。两种模式都仍由商品页最终域名门禁保护。
+        """
+        self._log('info',
+                  f'setup开始 marketplace={self.marketplace} '
+                  f'location_mode={getattr(self, "location_mode", "unknown")} '
+                  f'address={getattr(self.page, "address", "")}')
         try:
+            location_mode = getattr(
+                self, 'location_mode',
+                'postal' if self.marketplace == 'CA' else 'proxy')
             language = 'en_CA' if self.marketplace == 'CA' else 'en_US'
-            self.page.get(f'https://www.{self.profile.domain}/?language={language}', timeout=30, retry=0)
+            navigation_ok = self.page.get(
+                f'https://www.{self.profile.domain}/?language={language}',
+                timeout=30, retry=0)
+            if navigation_ok is False:
+                # DrissionPage 4.1.1.4 returns False when its document-load
+                # wait expires, even though Page.navigate has already moved
+                # the page to the requested Amazon host.  Do not discard a
+                # valid session solely because the boolean is False; the
+                # host gate below remains authoritative.  An empty/wrong
+                # host is still a hard failure and prevents stale-page use.
+                observed_url = getattr(self.page, 'url', '') or ''
+                observed_host = (urlsplit(observed_url).hostname or '').lower()
+                target_hosts = (self.profile.domain, 'www.' + self.profile.domain)
+                if observed_host not in target_hosts:
+                    self.location_error = 'navigation_failed: marketplace_home'
+                    self._log('error',
+                              'setup首页导航失败，未到达目标域名 '
+                              f'observed_url={observed_url!r} observed_host={observed_host or "unknown"}')
+                    return False
+                self._log('warning',
+                          'setup首页导航返回False但目标域名已到达，继续执行位置/页面校验 '
+                          f'observed_url={observed_url!r}')
             try:
                 self.page.wait.doc_loaded(timeout=15)
             except Exception:
                 time.sleep(3)
-            for _ in range(3):
-                try:
-                    self.page.run_js(
-                        f"document.cookie = 'sp-cdn={self.postal_code}|M|{self.postal_code}; "
-                        f"path=/; domain=.{self.profile.domain}';")
-                    break
-                except Exception:
-                    time.sleep(2)
-            # Amazon 地址组件可能在首次打开时仍显示旧状态（例如
-            # `Update location`），这属于初始化瞬态，不应要求整轮任务
-            # 由调度器重启。有限重试并保留最后一次诊断；连续失败才阻断。
-            self.location_verified = False
-            for location_attempt in range(3):
-                self.location_verified = self._set_postal_code()
-                if self.location_verified:
-                    break
-                if location_attempt < 2:
-                    self._sleep(2)
+            # 首页若被站点区域重定向到另一个 Amazon 域名，先在 setup 阶段
+            # 阻断；尤其是 CA 不能把 amazon.com 页面当作加拿大上下文继续用。
+            home_url = getattr(self.page, 'url', '')
+            if isinstance(home_url, str) and home_url:
+                home_host = (urlsplit(home_url).hostname or '').lower()
+                if home_host not in (self.profile.domain, 'www.' + self.profile.domain):
+                    self.location_error = (
+                        f'marketplace_mismatch: 首页域名 {home_host or "unknown"} '
+                        f'不是目标 {self.profile.domain}')
+                    return False
+            if location_mode == 'proxy':
+                # 不读取/覆盖 US 地址组件；此处只登记模式。商品抓取时仍会
+                # 强制最终页面 host 与目标 Marketplace 一致，代理出口由运行
+                # 环境（紫鸟/VPN/显式 proxy）负责。
+                self.location_verified = True
+                self.location_verification_method = 'proxy_egress'
+            else:
+                if not getattr(self, 'postal_code', ''):
+                    self.location_error = 'postal_missing_for_postal_mode'
+                    return False
+                for _ in range(3):
+                    try:
+                        self.page.run_js(
+                            f"document.cookie = 'sp-cdn={self.postal_code}|M|{self.postal_code}; "
+                            f"path=/; domain=.{self.profile.domain}';")
+                        break
+                    except Exception:
+                        time.sleep(2)
+                # Amazon 地址组件可能在首次打开时仍显示旧状态（例如
+                # `Update location`），这属于初始化瞬态，不应要求整轮任务
+                # 由调度器重启。有限重试并保留最后一次诊断；连续失败才阻断。
+                self.location_verified = False
+                for location_attempt in range(3):
+                    self.location_verified = self._set_postal_code()
+                    if self.location_verified:
+                        break
+                    if location_attempt < 2:
+                        self._sleep(2)
             if strict_location and not self.location_verified:
-                print(f'[setup] {self.marketplace} 邮编未能在页面地址栏验证: '
-                      f'{self.postal_code}', flush=True)
+                print(f'[setup] {self.marketplace} 位置上下文未能验证 '
+                      f'(mode={location_mode}, value={self.postal_code or "<proxy>"})',
+                      flush=True)
                 return False
             self._sleep(1)
             self._inited = True
+            self._log('info',
+                      f'setup成功 marketplace={self.marketplace} '
+                      f'location_verified={getattr(self, "location_verified", False)} '
+                      f'location_method={getattr(self, "location_verification_method", "") or "none"} '
+                      f'page_url={getattr(self.page, "url", "")}')
             return True
         except Exception as e:
-            print(f'[setup] 浏览器初始化失败: {type(e).__name__}: {e}', flush=True)
+            self._log('error',
+                      f'setup失败 marketplace={self.marketplace} '
+                      f'error={type(e).__name__}: {str(e)[:240]} '
+                      f'location_error={getattr(self, "location_error", "")}')
             return False
 
     def _set_postal_code(self) -> bool:
         """通过 Amazon 地址弹窗设置邮编，并从导航栏文本回读验证。"""
+        location_mode = getattr(
+            self, 'location_mode',
+            'postal' if self.marketplace == 'CA' else 'proxy')
+        if location_mode != 'postal' or not getattr(self, 'postal_code', ''):
+            self.location_error = 'postal_setup_not_required_in_proxy_mode'
+            return location_mode == 'proxy'
         try:
             normalize = lambda text: re.sub(r'[^A-Z0-9]', '', text.upper())
             ingress = self.page.ele('css:#glow-ingress-line2')
@@ -177,8 +359,18 @@ class AmazonBrowser:
                 return False
             self._safe_click(trigger)
             self._sleep(1)
-            first = self.page.ele('css:#GLUXZipUpdateInput_0')
-            second = self.page.ele('css:#GLUXZipUpdateInput_1')
+            # 地址弹窗由 Amazon 异步渲染；在英国/其它默认区域切换到
+            # US/CA 邮编时，输入框经常在点击后 1～3 秒才进入 DOM。固定
+            # sleep(1) 会把正常慢弹窗误判成 postal_input_not_found。
+            first = second = field = None
+            for attempt in range(8):
+                first = self.page.ele('css:#GLUXZipUpdateInput_0')
+                second = self.page.ele('css:#GLUXZipUpdateInput_1')
+                field = self.page.ele('css:#GLUXZipUpdateInput')
+                if (first and second) or field:
+                    break
+                if attempt < 7:
+                    self._sleep(0.5)
             if first and second:
                 compact = re.sub(r'[^A-Z0-9]', '', self.postal_code.upper())
                 if len(compact) != 6:
@@ -187,14 +379,19 @@ class AmazonBrowser:
                 first.input(compact[:3], clear=True)
                 second.input(compact[3:], clear=True)
             else:
-                field = self.page.ele('css:#GLUXZipUpdateInput')
                 if not field:
                     self.location_error = 'postal_input_not_found'
                     return False
                 field.input(self.postal_code, clear=True)
-            button = self.page.ele('css:#GLUXZipUpdate')
-            if not button:
-                button = self.page.ele('css:#GLUXZipUpdate-announce')
+            button = None
+            for attempt in range(6):
+                button = self.page.ele('css:#GLUXZipUpdate')
+                if not button:
+                    button = self.page.ele('css:#GLUXZipUpdate-announce')
+                if button:
+                    break
+                if attempt < 5:
+                    self._sleep(0.5)
             if not button:
                 self.location_error = 'postal_submit_not_found'
                 return False
@@ -258,30 +455,66 @@ class AmazonBrowser:
             tab.set.timeouts(base=budget(cfg['page_timeout']),
                              page_load=budget(cfg['page_timeout']), script=budget(cfg['page_timeout']))
             # DrissionPage may report a navigation failure by returning False
-            # instead of raising.  Never inspect the DOM after that point: the
-            # tab can still contain the preceding ASIN and would otherwise
-            # produce a false identity_mismatch.
+            # instead of raising.  It can mean either a real failure or a
+            # document-load timeout after the URL has already changed.  Only
+            # continue when the tab URL is already bound to this request's
+            # ASIN and Marketplace; otherwise fail closed so a preceding ASIN
+            # can never leak into the result.
             navigation_ok = tab.get(url, timeout=budget(cfg['page_timeout']), retry=0)
             if navigation_ok is False:
-                cr.status = PageStatus.CRAWL_ERROR
-                cr.error = 'navigation_failed: tab.get 返回失败'
-                return cr
+                observed_url = getattr(tab, 'url', '') or ''
+                if not self._url_matches_request(observed_url, row.asin):
+                    cr.status = PageStatus.CRAWL_ERROR
+                    cr.error = (f'navigation_failed: tab.get 返回失败，当前URL未绑定请求 '
+                                f'ASIN/站点 observed_url={observed_url!r}')
+                    self._log('warning',
+                              f'navigation失败 asin={row.asin} observed_url={observed_url!r}')
+                    return cr
+                self._log('warning',
+                          f'navigation返回False但当前URL已绑定请求 asin={row.asin} '
+                          f'observed_url={observed_url!r}，继续DOM门禁')
             try:
                 loaded = tab.wait.doc_loaded(timeout=budget(cfg['page_timeout']))
             except Exception as exc:
                 cr.status = PageStatus.CRAWL_ERROR
                 cr.error = f'navigation_timeout: 页面未完成加载 ({type(exc).__name__})'
+                self._log('warning',
+                          f'doc_loaded异常 asin={row.asin} '
+                          f'error={type(exc).__name__}: {str(exc)[:160]}')
                 return cr
             # Some DrissionPage versions return False on a doc-loaded timeout
-            # without raising.  Treat it exactly like an exception.
+            # without raising.  If navigation has already reached this ASIN,
+            # continue to the shell/identity checks; otherwise fail closed.
             if loaded is False:
-                cr.status = PageStatus.CRAWL_ERROR
-                cr.error = 'navigation_timeout: 页面未完成加载 (doc_loaded=False)'
-                return cr
+                observed_url = getattr(tab, 'url', '') or ''
+                if not self._url_matches_request(observed_url, row.asin):
+                    cr.status = PageStatus.CRAWL_ERROR
+                    cr.error = ('navigation_timeout: 页面未完成加载 (doc_loaded=False)，'
+                                f'当前URL未绑定请求 observed_url={observed_url!r}')
+                    self._log('warning',
+                              f'doc_loaded超时且URL不匹配 asin={row.asin} '
+                              f'observed_url={observed_url!r}')
+                    return cr
+                self._log('warning',
+                          f'doc_loaded返回False但URL已绑定请求 asin={row.asin} '
+                          f'observed_url={observed_url!r}，继续DOM门禁')
             page_meta = tab.run_js('return {url:location.href,title:document.title};',
                                    timeout=budget(cfg['page_timeout']))
-            cr.page_url = page_meta['url']
-            cr.page_title = (page_meta['title'] or '').strip()[:200]
+            if not isinstance(page_meta, dict):
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = 'navigation_failed: 无法读取当前页面 URL/title'
+                self._log('warning',
+                          f'页面元数据无效 asin={row.asin} type={type(page_meta).__name__}')
+                return cr
+            cr.page_url = str(page_meta.get('url') or '')
+            cr.page_title = str(page_meta.get('title') or '').strip()[:200]
+            if self._is_browser_error_url(cr.page_url):
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = f'navigation_failed: Chrome错误页 {cr.page_url}'
+                self._log('warning',
+                          f'导航落入Chrome错误页 asin={row.asin} page_url={cr.page_url!r} '
+                          f'title={cr.page_title!r}')
+                return cr
 
             title = cr.page_title.lower()
             if '429' in title or 'too many requests' in title:
@@ -328,11 +561,26 @@ class AmazonBrowser:
                 cr.error = 'location_unverified: 未验证目标邮编，禁止采信价格'
                 return cr
 
-            # 等待主价；不额外刷新，所有等待受同一绝对deadline约束。
+            # 等待当前商品主体；不能等待全页面任意 `.a-price`，因为推荐卡
+            # 通常先渲染，会让等待条件提前满足，随后采到“标题/URL正确但主体
+            # 为空”的残缺页面。所有等待受同一绝对 deadline 约束。
             try:
-                tab.wait.ele_displayed('css:.a-price, css:.priceToPay', timeout=budget(cfg['price_wait_timeout']))
-            except Exception:
-                pass  # retries navigate once more within the same absolute deadline
+                tab.wait.ele_displayed(
+                    'css:#productTitle, css:#landingImage, '
+                    'css:#imgTagWrapperId img, '
+                    'css:#corePrice_feature_div .a-price, '
+                    'css:#corePriceDisplay_desktop_feature_div .a-price, '
+                    'css:#corePrice_feature_div .priceToPay, '
+                    'css:#corePriceDisplay_desktop_feature_div .priceToPay, '
+                    'css:#buybox .a-price, css:#buybox .priceToPay, '
+                    'css:#buybox, css:#availability, '
+                    'css:#availabilityInsideBuyBox_feature_div',
+                    timeout=budget(cfg['price_wait_timeout']))
+            except Exception as exc:
+                self._log('warning',
+                          f'商品主体等待异常 asin={row.asin} '
+                          f'error={type(exc).__name__}: {str(exc)[:160]}；交由shell门禁分类')
+                pass  # 后续 shell 门禁会明确分类；重试仍受同一 deadline 约束
             time.sleep(budget(random.uniform(0.5, 1.5)))
 
             tab.set.timeouts(script=budget(cfg['page_timeout']))
@@ -454,7 +702,21 @@ class AmazonBrowser:
                 postal:document.querySelector('#glow-ingress-line2')?.innerText || '',
                 html:clone.outerHTML,ac_badge:ac_badge,product_shell:product_shell};''', timeout=budget(cfg['page_timeout']))
             budget(cfg['page_timeout'])
-            cr.page_url, cr.page_title = sample['url'], sample['title'][:200]
+            if not isinstance(sample, dict):
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = 'navigation_failed: 页面快照无效'
+                self._log('warning',
+                          f'页面快照无效 asin={row.asin} type={type(sample).__name__}')
+                return cr
+            cr.page_url = str(sample.get('url') or '')
+            cr.page_title = str(sample.get('title') or '')[:200]
+            if self._is_browser_error_url(cr.page_url):
+                cr.status = PageStatus.CRAWL_ERROR
+                cr.error = f'navigation_failed: Chrome错误页 {cr.page_url}'
+                self._log('warning',
+                          f'快照落入Chrome错误页 asin={row.asin} page_url={cr.page_url!r} '
+                          f'title={cr.page_title!r}')
+                return cr
             if any(k in cr.page_title.lower() for k in TITLE_404):
                 cr.status = PageStatus.PAGE_NOT_FOUND
                 return cr
@@ -469,10 +731,20 @@ class AmazonBrowser:
                 cr.currency_code = ''
                 cr.error = 'marketplace_mismatch: 读取价格时站点已变化'
                 return cr
-            cr.location_verified = self._postal_matches(sample.get('postal') or '')
+            location_mode = getattr(
+                self, 'location_mode',
+                'postal' if self.marketplace == 'CA' else 'proxy')
+            if location_mode == 'proxy':
+                # US proxy 模式不再读取或比较固定邮编；只继承 setup 对实际
+                # 浏览器出口模式的确认，最终 amazon.com host 门禁仍在上方。
+                cr.location_verified = self.location_verified
+            else:
+                cr.location_verified = self._postal_matches(sample.get('postal') or '')
             if not cr.location_verified:
                 cr.status = PageStatus.CRAWL_ERROR
-                cr.error = 'location_unverified: 当前商品页面邮编不匹配'
+                cr.error = ('location_unverified: 当前商品页面位置上下文未验证'
+                            if location_mode == 'proxy'
+                            else 'location_unverified: 当前商品页面邮编不匹配')
                 return cr
             shell = sample.get('product_shell') or {}
             # The document title and URL can survive an Amazon risk/resource
@@ -545,10 +817,14 @@ class AmazonBrowser:
             cr.status = PageStatus.PARSE_ERROR
             cr.display_price = None
             cr.error = str(e)
+            self._log('warning', f'促销证据解析失败 asin={row.asin} error={str(e)[:200]}')
             return cr
         except Exception as e:
             cr.status = PageStatus.CRAWL_ERROR
             cr.error = f'{type(e).__name__}: {str(e)[:80]}'
+            self._log('warning',
+                      f'商品抓取异常 asin={row.asin} '
+                      f'error={type(e).__name__}: {str(e)[:200]}')
             return cr
         finally:
             if time.monotonic() >= deadline:
@@ -663,6 +939,11 @@ class AmazonBrowser:
 
     def quit(self):
         try:
-            self.page.quit()
+            page = getattr(self, 'page', None)
+            if page is not None:
+                page.quit()
+            self._log('info',
+                      f'浏览器已关闭 address={getattr(page, "address", "")} '
+                      f'startup_stage={getattr(self, "browser_startup_stage", "unknown")}')
         except Exception:
             pass

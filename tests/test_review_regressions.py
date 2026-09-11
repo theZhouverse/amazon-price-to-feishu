@@ -22,6 +22,7 @@ class PriceEvidenceTests(unittest.TestCase):
         self.b = object.__new__(AmazonBrowser)
         self.b.profile = MARKETPLACES['CA']
         self.b.marketplace = 'CA'
+        self.b.location_mode = 'postal'
         self.b.postal_code = 'M5V3A8'
         self.b.location_verified = True
         self.b._sleep = Mock()
@@ -30,11 +31,14 @@ class PriceEvidenceTests(unittest.TestCase):
                     'ambiguous_price_ratio': '0.05', 'per_asin_timeout': 10,
                     'retry': 1, 'risk_cooldown_min': 60, 'risk_cooldown_max': 180}
 
-    def fetch(self, html, url='https://www.amazon.ca/dp/B000000001?th=1', title='Product'):
+    def fetch(self, html, url='https://www.amazon.ca/dp/B000000001?th=1', title='Product',
+              product_shell=None):
         self.tab = Mock()
-        self.tab.run_js.side_effect = lambda script, **kw: (
-            {'url': url, 'title': title, 'html': html, 'asin': self.row.asin,
-             'postal': self.b.postal_code})
+        sample = {'url': url, 'title': title, 'html': html, 'asin': self.row.asin,
+                  'postal': self.b.postal_code}
+        if product_shell is not None:
+            sample['product_shell'] = product_shell
+        self.tab.run_js.side_effect = lambda script, **kw: sample
         with patch('amazon.crawler.time.sleep'):
             return self.b.fetch_once(self.tab, self.row, self.cfg)
 
@@ -45,6 +49,37 @@ class PriceEvidenceTests(unittest.TestCase):
         html = '<div id="recommendations"><span class="a-offscreen">$19.99</span></div>'
         self.assertIsNone(select_main_price(parse_main_price(html), '0.05')[0])
         self.assertEqual(self.fetch(html).status, PageStatus.PARSE_ERROR)
+
+    def test_product_wait_does_not_accept_recommendation_price(self):
+        self.fetch(self.price())
+        selector = self.tab.wait.ele_displayed.call_args.args[0]
+        self.assertIn('#corePrice_feature_div', selector)
+        self.assertIn('#productTitle', selector)
+        self.assertNotIn('css:.a-price, css:.priceToPay', selector)
+
+    def test_incomplete_product_shell_is_explicit_technical_error(self):
+        html = '<div id="recommendations"><span class="a-offscreen">$19.99</span></div>'
+        shell = {'title': False, 'main_image': False, 'center': True,
+                 'buybox': False, 'price': False, 'availability': False}
+        cr = self.fetch(html, product_shell=shell)
+        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertIn('incomplete_product_page', cr.error)
+        self.assertIn("'price': False", cr.error)
+
+    def test_incomplete_page_retry_rebuilds_once_without_risk_cooldown(self):
+        first = CrawlResult(asin=self.row.asin, status=PageStatus.CRAWL_ERROR,
+                            error='incomplete_product_page: shell')
+        second = CrawlResult(asin=self.row.asin, status=PageStatus.CRAWL_ERROR,
+                             error='incomplete_product_page: shell')
+        self.b.fetch_once = Mock(side_effect=[first, second])
+        self.b.rebuild = Mock(return_value=Mock())
+        cfg = {**self.cfg, 'retry': 2}
+        with patch('amazon.crawler.random.uniform', return_value=2.0):
+            result, _ = self.b.fetch_with_retry(Mock(), self.row, cfg)
+        self.assertEqual(result.status, PageStatus.CRAWL_ERROR)
+        self.assertEqual(self.b.fetch_once.call_count, 2)
+        self.b.rebuild.assert_called_once()
+        self.b._sleep.assert_called_once_with(2.0)
 
     def test_empty_main_container_cannot_leak_into_following_price(self):
         html = '<div id="corePrice_feature_div"></div><span class="a-offscreen">$19.99</span>'
@@ -94,6 +129,123 @@ class PriceEvidenceTests(unittest.TestCase):
         self.assertTrue(self.b.setup())
         self.assertEqual(self.b._set_postal_code.call_count, 2)
 
+    def test_postal_setup_waits_for_slow_address_modal(self):
+        class Element:
+            def __init__(self, text=''):
+                self.text = text
+                self.inputs = []
+                self.clicked = 0
+
+            def input(self, value, clear=False):
+                self.inputs.append((value, clear))
+
+            def click(self, **kwargs):
+                self.clicked += 1
+
+        trigger = Element('Deliver to United Kingdom')
+        field = Element()
+        button = Element('Done')
+        ingress = Element('M5V3A8')
+        page = Mock()
+        page.ele.side_effect = lambda selector: (
+            (ingress if button.clicked else Element('United Kingdom'))
+                if selector == 'css:#glow-ingress-line2' else
+            trigger if selector == 'css:#nav-global-location-popover-link' else
+            field if selector == 'css:#GLUXZipUpdateInput' and page.ele.call_count >= 7 else
+            button if selector in ('css:#GLUXZipUpdate', 'css:#GLUXZipUpdate-announce') and page.ele.call_count >= 9 else
+            None)
+        self.b.page = page
+        self.b._sleep = Mock()
+        self.assertTrue(self.b._set_postal_code())
+        self.assertEqual(field.inputs, [('M5V3A8', True)])
+        self.assertGreaterEqual(self.b._sleep.call_count, 2)
+
+    def test_us_proxy_setup_does_not_inject_legacy_zip(self):
+        """US 位置由代理出口决定，不写 90210 cookie，也不打开地址弹窗。"""
+        self.b.profile = MARKETPLACES['US']
+        self.b.marketplace = 'US'
+        self.b.location_mode = 'proxy'
+        self.b.postal_code = ''
+        self.b.page = Mock()
+        self.b._sleep = Mock()
+        self.b._set_postal_code = Mock(side_effect=AssertionError('proxy mode must not set postal'))
+        self.assertTrue(self.b.setup(strict_location=True))
+        self.assertTrue(self.b.location_verified)
+        self.assertEqual(self.b.location_verification_method, 'proxy_egress')
+        self.b.page.run_js.assert_not_called()
+
+    def test_setup_navigation_false_but_target_host_reached_continues(self):
+        """Chrome 慢加载时 get=False 不应误阻断已到达的 Amazon 首页。"""
+        self.b.profile = MARKETPLACES['US']
+        self.b.marketplace = 'US'
+        self.b.location_mode = 'proxy'
+        self.b.postal_code = ''
+        self.b.page = Mock()
+        self.b.page.get.return_value = False
+        self.b.page.url = 'https://www.amazon.com/?language=en_US'
+        self.b._sleep = Mock()
+        self.assertTrue(self.b.setup(strict_location=True))
+        self.assertTrue(self.b.location_verified)
+
+    def test_setup_navigation_false_wrong_host_fails_closed(self):
+        """get=False 且仍停在其它域名时必须阻断，防止复用旧会话。"""
+        self.b.profile = MARKETPLACES['US']
+        self.b.marketplace = 'US'
+        self.b.location_mode = 'proxy'
+        self.b.postal_code = ''
+        self.b.page = Mock()
+        self.b.page.get.return_value = False
+        self.b.page.url = 'https://www.amazon.ca/'
+        self.assertFalse(self.b.setup(strict_location=True))
+        self.assertIn('navigation_failed', self.b.location_error)
+
+    @patch('amazon.crawler.ChromiumPage')
+    def test_chrome_152_cdp_compatibility_flags_are_present(self, chromium_page):
+        """浏览器启动必须放行本机CDP并规避已知GPU/沙箱启动崩溃。"""
+        chromium_page.return_value.new_tab.return_value = Mock()
+        browser = AmazonBrowser(headless=True, marketplace='US',
+                                location_mode='proxy', tabs=1)
+        options = chromium_page.call_args.args[0]
+        self.assertIn('--remote-allow-origins=*', options.arguments)
+        self.assertIn('--disable-gpu', options.arguments)
+        self.assertIn('--no-sandbox', options.arguments)
+        self.assertNotIn('--in-process-gpu', options.arguments)
+        self.assertTrue(options.is_auto_port)
+        self.assertEqual(browser.postal_code, '')
+
+    def test_browser_log_redacts_proxy_argument(self):
+        args = ['--proxy-server=user:secret@127.0.0.1:7897',
+                '--user-data-dir=C:\\private\\profile']
+        safe = AmazonBrowser._safe_args(args)
+        self.assertNotIn('secret', safe)
+        self.assertNotIn('C:\\private', safe)
+        self.assertIn('--proxy-server=<configured>', safe)
+        self.assertIn('--user-data-dir=<managed>', safe)
+
+    def test_ca_setup_rejects_homepage_redirect_to_us_domain(self):
+        """CA 初始化若首页先跳到 amazon.com，不得继续套用CAD/CA规则。"""
+        self.b.profile = MARKETPLACES['CA']
+        self.b.marketplace = 'CA'
+        self.b.location_mode = 'postal'
+        self.b.postal_code = 'M5V 3A8'
+        self.b.page = Mock()
+        self.b.page.url = 'https://www.amazon.com/'
+        self.assertFalse(self.b.setup(strict_location=True))
+        self.assertIn('marketplace_mismatch', self.b.location_error)
+        self.b.page.run_js.assert_not_called()
+
+    def test_us_proxy_fetch_does_not_require_page_postal_text(self):
+        """US proxy 模式即使导航栏没有邮编文本也允许继续解析商品。"""
+        self.b.profile = MARKETPLACES['US']
+        self.b.marketplace = 'US'
+        self.b.location_mode = 'proxy'
+        self.b.postal_code = ''
+        self.b.location_verified = True
+        cr = self.fetch(self.price('$19.99'),
+                        url='https://www.amazon.com/dp/B000000001')
+        self.assertEqual(cr.status, PageStatus.OK)
+        self.assertTrue(cr.location_verified)
+
     def test_conflict_is_parse_error_not_sold_out(self):
         html = self.price('$10') + '<div id="buybox"><span class="a-offscreen">$20</span></div>'
         self.assertEqual(self.fetch(html).status, PageStatus.PARSE_ERROR)
@@ -133,6 +285,46 @@ class PriceEvidenceTests(unittest.TestCase):
         self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
         self.assertIn('navigation_failed', cr.error)
         self.tab.run_js.assert_not_called()
+
+    def test_navigation_false_matching_asin_continues_to_dom_gates(self):
+        """get=False 但 URL 已切到请求 ASIN 时，继续由页面门禁决定结果。"""
+        self.tab = Mock()
+        self.tab.get.return_value = False
+        self.tab.url = 'https://www.amazon.ca/dp/B000000001?th=1'
+        cr = self.fetch_once_with_tab(self.tab, self.price('CA$19.99'))
+        self.assertEqual(cr.status, PageStatus.OK)
+
+    def test_doc_loaded_false_matching_asin_continues_to_dom_gates(self):
+        """doc_loaded=False 可是 URL 已是当前 ASIN，不能误读上一页或直接丢弃。"""
+        self.tab = Mock()
+        self.tab.get.return_value = True
+        self.tab.url = 'https://www.amazon.ca/dp/B000000001?th=1'
+        self.tab.wait.doc_loaded.return_value = False
+        cr = self.fetch_once_with_tab(self.tab, self.price('CA$19.99'))
+        self.assertEqual(cr.status, PageStatus.OK)
+
+    def test_navigation_false_different_asin_fails_closed(self):
+        """URL 指向上一条 ASIN 时，不能进入 run_js/价格解析。"""
+        self.tab = Mock()
+        self.tab.get.return_value = False
+        self.tab.url = 'https://www.amazon.ca/dp/B000000002?th=1'
+        cr = self.fetch_once_with_tab(self.tab, self.price('CA$19.99'))
+        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertIn('navigation_failed', cr.error)
+        self.tab.run_js.assert_not_called()
+
+    def test_chrome_error_page_is_navigation_failure_not_identity_mismatch(self):
+        """Chrome 内置错误页必须记录为导航失败，便于定位网络/CDP问题。"""
+        cr = self.fetch('', url='chrome-error://chromewebdata/', title='www.amazon.com')
+        self.assertEqual(cr.status, PageStatus.CRAWL_ERROR)
+        self.assertIn('Chrome错误页', cr.error)
+
+    def fetch_once_with_tab(self, tab, html):
+        sample = {'url': tab.url, 'title': 'Product', 'html': html,
+                  'asin': self.row.asin, 'postal': self.b.postal_code}
+        tab.run_js.side_effect = lambda script, **kw: sample
+        with patch('amazon.crawler.time.sleep'):
+            return self.b.fetch_once(tab, self.row, self.cfg)
 
     def test_doc_loaded_timeout_does_not_read_stale_tab(self):
         self.tab = Mock()

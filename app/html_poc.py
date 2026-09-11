@@ -22,9 +22,17 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config()
     profile = MARKETPLACES[args.marketplace]
-    postal = cfg['ca_postal'] if args.marketplace == 'CA' else cfg['us_zip']
+    location_mode = (cfg.get('ca_location_mode') if args.marketplace == 'CA'
+                     else cfg.get('us_location_mode')) or (
+                         'postal' if args.marketplace == 'CA' else 'proxy')
+    postal = (cfg['ca_postal'] if args.marketplace == 'CA'
+              and location_mode == 'postal' else None)
     browser = AmazonBrowser(headless=not args.no_headless, marketplace=args.marketplace,
-                            postal_code=postal, proxy=cfg.get('proxy') or None, tabs=1)
+                            postal_code=postal, proxy=cfg.get('proxy') or None, tabs=1,
+                            location_mode=location_mode,
+                            browser_auto_port=bool(cfg.get('browser_auto_port', True)),
+                            browser_no_sandbox=bool(cfg.get('browser_no_sandbox', True)),
+                            browser_disable_gpu=bool(cfg.get('browser_disable_gpu', True)))
     tab = None
     try:
         if not browser.setup(strict_location=True):

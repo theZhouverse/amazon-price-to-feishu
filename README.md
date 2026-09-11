@@ -2,6 +2,8 @@
 
 当前正式入口、部署和运行命令见[docs/SPEC.md](docs/SPEC.md)第18～19节。目录及配置职责见第3～4节；实施状态见[docs/TASKS.md](docs/TASKS.md)，未解决问题见[docs/REVIEWS.md](docs/REVIEWS.md)。
 
+生产部署仅支持 Windows 宿主机本地运行（项目 `.venv`、本机 Chromium/紫鸟会话和隐藏计划任务）；Docker/容器方案已取消，不在当前交付范围内。
+
 启动中心选项3执行PD03单条只读验证，选项4执行正式周报全量；Windows工作日07:30/15:30也进入weekly-run。周一07:30沿用上一周已固化周报，周一15:30切换登记表中的最新周报，周二至周五沿用本周周期；该来源时点规则以SPEC第16.1节为准。无参数及旧push-only拒绝执行，防止误入旧六列流程。真实在线验收边界见REVIEWS。
 
 源码在app，配置与模板在config，脚本在bin，测试在tests；完整文档导航见[docs/README.md](docs/README.md)。

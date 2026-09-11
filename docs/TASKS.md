@@ -1,12 +1,44 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 Docker方案取消、宿主机本地交付（最新）
+
+- [x] 根据最新决策取消 Docker 支持：删除 `deploy/docker/` 下 Dockerfile、Compose、entrypoint 和迁移说明，同时删除 Docker 专用静态测试；不再把容器构建、镜像迁移或容器 cron 纳入交付验收。
+- [x] SPEC、操作手册、交付清单和本文件已统一为 Windows 宿主机本地唯一生产路径：`.venv` + 本机 Chromium/DrissionPage + 紫鸟/ZClaw + 隐藏 Windows 计划任务。历史 Docker 验收记录保留在历史段落，仅用于追溯，不代表当前支持矩阵。
+- [x] 本机运行时仍支持显式 `AMAZON_PROXY`、`AMAZON_FEEDBACK_ENABLED` 等环境覆盖；这些是宿主机运行参数，不再与 Docker 绑定。
+- [x] 删除 Docker 测试后重新执行本地回归：`PYTHONPATH=app; .venv\\Scripts\\python.exe -m unittest discover -s tests -p 'test_*.py' -q`，`351/351`通过，命令墙钟约3.46秒；`compileall`、PowerShell/JSON 解析和 `git diff --check`均通过。未写飞书、未发送外部通知。
+- [ ] `20260911_073004` 仍是旧代码/旧位置模式下的 `partial`（价格/前端 `written_rows=0`、`blocked=719`、Feedback写入11行）；修复后的18表全量、固定表写后回读和通知仍需下一次真实计划窗口验收。
+- [ ] Windows 计划任务回读当前仍受“拒绝访问”限制，需在 Administrator PowerShell 确认四个本地隐藏任务的 Hidden、Enabled、实际槽位参数，以及15:30是否按运行策略禁用。
+
+## 2026-09-11 浏览器启动兼容、导航门禁与诊断日志（最新）
+
+- [x] 清理本轮残留 Chrome/Edge/Brave/Firefox 进程后再验证；未复用固定9222旧会话。`AmazonBrowser`默认启用受控随机CDP端口（`9222-19222`），启动时使用本机Chromium原生UA，并增加`--remote-allow-origins=*`、`--disable-gpu`、`--no-sandbox`兼容参数；三项由`browser_auto_port`、`browser_disable_gpu`、`browser_no_sandbox`配置控制。
+- [x] 启动日志已写入`outputs/logs/run_*.log`：记录options/CDP连接阶段、Marketplace、headless、端口、Chrome版本、脱敏参数、代理是否显式配置、启动耗时、setup位置验证、关闭阶段；不记录Secret、Cookie或完整代理凭证。
+- [x] 修复DrissionPage返回值误判：`Page.get()`/`doc_loaded()`返回`False`时，只有当前Tab URL同时匹配目标Marketplace域名和请求ASIN才允许继续后续DOM门禁；空URL、跨站、不同ASIN或`chrome-error://`错误页立即记录`navigation_failed`/`navigation_timeout`并阻断，禁止解析上一商品残留DOM。Chrome错误页单独分类为`crawl_error/navigation_failed`，不再伪装成`identity_mismatch`。
+- [x] 新增回归覆盖：setup导航False的目标域名放行/错误域名阻断、Tab导航False的当前ASIN放行/上一ASIN阻断、doc_loaded超时门禁、Chrome错误页分类、异常日志、代理参数脱敏和Feedback运行时布尔开关；删除 Docker 专用测试后完整离线套件为`351/351`通过，`compileall`通过。
+- [x] 真实浏览器只读单点复测（均显式使用本机代理`AMAZON_PROXY=127.0.0.1:7897`，未写飞书）：US `B0C5R56QTF` 于`13:28:31-13:29:16`完成，启动耗时1.155s、`status=ok`、USD、价格39.99；CA `B0BNDLKP54` 于`13:29:32-13:30:29`完成，启动耗时1.390s、`status=ok`、CAD、加拿大邮编`M5V 3A8`、价格69.99。证据分别为`outputs/poc_resources/r1_7_us_B0C5R56QTF.json`、`outputs/poc_resources/r1_7_ca_B0BNDLKP54.json`及对应`outputs/logs/run_20260911_1328.log`、`run_20260911_1329.log`；运行结束已确认无残留浏览器进程。
+- [x] 无显式Amazon代理的对照运行正确暴露外部网络边界：US商品页落入`chrome-error://chromewebdata/`，日志和报告记录为`navigation_failed`，不是浏览器启动失败。项目仍不静默继承通用`HTTP_PROXY/HTTPS_PROXY`；生产如需该出口必须在`config.proxy`或`AMAZON_PROXY`显式配置，或确认紫鸟/VPN已提供出口。
+- [ ] 生产全量仍需在实际计划窗口用目标设备的显式代理/紫鸟出口验收；单点通过不能外推全量风控、CA重定向或飞书写入成功。
+
+## 2026-09-11 US代理位置与CA邮编策略收敛
+
+- [x] 确认问题：旧入口无条件把 `cfg['us_zip']`（默认 `90210`）传给所有US浏览器并设置 `sp-cdn`/地址弹窗；这会把代理出口位置与固定示例邮编耦合，且可能覆盖紫鸟/VPN的真实区域。
+- [x] 新增显式位置模式：`us_location_mode=proxy`、`ca_location_mode=postal`。US proxy模式不注入US邮编、不写US `sp-cdn`、不打开地址弹窗，抓取仍强制最终host为 `amazon.com`；CA postal模式只使用 `amazon.ca` 与独立 `M5V 3A8` 页面校验，不把邮编拼入商品URL。
+- [x] 代理入口明确化：`config.proxy`或`AMAZON_PROXY`才会给Amazon浏览器设置代理；不自动继承通用`HTTP_PROXY/HTTPS_PROXY`。当前配置 `proxy` 为空，US位置验收必须依赖已生效的紫鸟/VPN出口或显式填入代理。
+- [x] 正式抓取、单ASIN PoC、HTML/MHTML工具及配置示例已统一读取上述模式；旧 `us_zip` 仅保留兼容字段，proxy模式不会使用。
+- [x] 回归验证：完整离线套件 `344/344` 通过，新增US proxy不写邮编/不读取页面邮编、US无邮编文本仍可解析商品的专门用例；未写飞书、未发送通知。
+- [x] 补齐 Windows Chrome 152 启动兼容：增加 `--remote-allow-origins=*`（修复CDP WebSocket 403导致的 `PageDisconnected/FrameTree timeout`）、`--disable-gpu`和`--no-sandbox`（修复当前主机GPU/沙箱启动崩溃），并启用受控auto-port；新增CA首页跳转到amazon.com时的早期域名阻断。详细实测见本文件顶部最新记录。
+- [x] 在线单点验收已在显式`AMAZON_PROXY=127.0.0.1:7897`下完成US/CA；代码不能凭空探测代理供应商的公网IP，运行日志以模式、最终域名、币种和页面位置证据为准。生产全量仍待目标计划窗口验收。
+
 ## 2026-09-11 Amazon残缺商品页识别与子表熔断修复
 
-- [x] 根据 `20260911_073004` 全量证据确认 US/CA 均返回“正确标题/URL + 顶部导航/推荐卡 + 商品详情主体空白”的残缺页面；同一 ASIN 单条复测仍无主价候选，根因属于 Amazon 会话/出口的页面降级，不是链接、币种或价格公式。
+- [x] 根据 `20260911_073004` 全量证据确认 US/CA 均返回“正确标题/URL + 顶部导航/推荐卡 + 商品详情主体空白”的残缺页面；后续 A/B 已将根因收敛为自动化固定过期 UA（Chrome/124）叠加地址弹窗异步等待不足，不能再笼统归因于 Amazon 出口，也不是价格公式问题。
 - [x] 在同一次冻结 DOM 快照中增加商品详情结构诊断：主价只统计 `corePrice`、`priceToPay`、Buy Box 等当前商品容器，不把推荐卡 `.a-price` 计为主价；缺少商品标题+主图、Buy Box 或当前商品主价时标记 `incomplete_product_page`，保存截图、shell 结构和诊断分类。
 - [x] 残缺页仅执行一次轻量 Tab 重建重试，不进入60～180秒风险冷却；同一子表连续8条触发子表熔断，未取行明确写入 `batch_circuit_breaker` 恢复清单，避免再次完整请求数百条空壳页面。
 - [x] 配置与示例新增 `incomplete_page_circuit_threshold=8`；等待时间试验已撤回，`price_wait_timeout` 保持12秒。
-- [x] 验证：`PYTHONPATH=app; .venv\\Scripts\\python.exe -m unittest discover -s tests -q`，338/338通过；US在线单条 `20260911_100819` 和 CA在线单条 `20260911_101439` 均在新逻辑下改判为 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；CA样本 `B0D9NT9JQN` 的 `amazon.ca`、CAD和邮编验证均保留。
+- [x] 验证：`PYTHONPATH=app; .venv\\Scripts\\python.exe -m unittest discover -s tests -q`，342/342通过；新增残缺商品页 shell 误判、推荐卡等待隔离、慢地址弹窗等待和“仅重建一次、短暂停顿后不进入60～180秒风险冷却”的专门回归用例；US在线单条 `20260911_100819` 和 CA在线单条 `20260911_101439` 均在旧 UA/旧地址等待逻辑下改判为 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；CA样本 `B0D9NT9JQN` 的 `amazon.ca`、CAD和邮编验证均保留。
+- [x] 根因修复与在线复测：移除过期 `Chrome/124` 固定 UA，改用本机 Chromium 原生 UA（当前 `HeadlessChrome/152`）；地址弹窗输入框/按钮增加有限异步等待。修复后同一 `PD03/B0C5R56QTF` 真实复测 run_id `20260911_112315` 成功：最终 URL 自动规范化为 `?th=1`，`status=ok`、展示价/目标价/最终价均 `39.99`、价格一致性 `✅(0.00)`、邮编验证通过；主图、品牌故事、前端尺寸、BSR、父子ASIN、环保标均 `pass`，AC 按页面事实为 `fail`。仅生成本地 bundle/log，未写生产飞书表。
+- [x] CA 对照复测：`CPD03/B0D9NT9JQN` 的真实最终页为 `B0BNDLKP54`，run_id `20260911_112549` 正确返回 `identity_mismatch`，没有误写别的 ASIN；随后用落地 ASIN `B0BNDLKP54` 只读复测 run_id `20260911_112722` 成功，`amazon.ca`、CAD、加拿大邮编验证、展示价/目标价/最终价 `69.99`、价格一致 `✅(0.00)`、折扣 `22%` 均正常。证明 CA 主链已恢复，剩余是源 ASIN 重定向需进入人工/恢复清单。
+- [x] 追加一次真实浏览器只读单点：通过 `tools/frontend_online_test.py` 内部原始入口执行 `PD03` 1 行，run_id `20260911_105130`，实际访问 `https://www.amazon.com/dp/B0C5R56QTF`，Chromium 导航、US 邮编和 USD 均到位；最终页面标题/URL正确但商品主体为空，结果明确为 `crawl_error/incomplete_product_page`，尝试2次、风险冷却0秒、没有主价候选，未写任何飞书表。截图、诊断、bundle和原始日志已保存；因主命令默认会创建隔离测试表，本次只调用同文件的在线抓取 helper，避免未经确认的云端写入。
 
 
 ## 2026-09-11 明早生产运行前完整检查与调度修复（最新）
@@ -209,7 +241,7 @@
 - [x] 在线确认：US `B0DRKD4LQC`连续3次新Tab仍跳转到`B0BY1Z43FP`；CA `B0BNDLKP54`在邮编验证/CAD证据正常时仍跳转到`B0D9NT9JQN`。两者均证明为Amazon实际重定向/源映射缺失，不接受落地页面价格。证据在`outputs/poc_resources/r1_7_us_B0DRKD4LQC.json`、`r1_7_ca_B0BNDLKP54.json`。
 - [x] 一次性通知范围：本轮使用 `--notify-manager-only`，通知回执仅包含周成业1个 `open_id`，成功1、失败0；该参数不改变默认协作者名单，后续计划任务不带此参数即恢复原协作者通知。
 - [x] 证据：`outputs/daily_runs/2026-09-02/20260902_121541_weekly_bundle.json`、`20260902_121541_weekly_summary.json`、`20260902_121541_delivery.json`、`20260902_121541_notifications.json`、`outputs/snapshots/20260902_121541/source.json`。
-- [x] Docker PoC实机构建与短启动验收（2026-09-02）：Docker Desktop Linux 引擎启动后，`docker compose build --no-cache` 成功生成 `amazon-daily:latest`（Linux/amd64、约334.6MB，含 Chromium 151）；容器内编译通过，使用镜像依赖与Chromium、只读挂载完整源码的269项回归通过。Compose 短启动时入口配置成功加载18个子表、健康检查为`healthy`，随后已主动 `down`，未触发抓取、飞书写入或通知。发现 Compose `init: true` 与镜像 `tini` 重复包装后已移除前者并复测 PID 1 为`tini`、日志无重复包装警告。
+- [x] 历史 Docker PoC 实机构建与短启动验收（2026-09-02，方案已取消）：Docker Desktop Linux 引擎曾生成 `amazon-daily:latest` 并完成容器内编译/短启动健康检查；该记录只保留用于追溯，当前不再交付镜像、Compose 或容器调度。
 - [x] Windows计划任务目标账户重新安装并回读（2026-09-02）：以 `chinami-coui675\\administrator` 执行 `bin\\schedule.bat --install`，退出码0。`AmazonDaily_0730`、`AmazonDaily_1530`均为 `Ready`、`Hidden=True`、`Execute=wscript.exe`，参数为 `//B //NoLogo bin\\hidden_ps1.vbs bin\\scheduled_run.ps1`；触发器为周一至周五，下一次分别为 2026-09-03 07:30、2026-09-02 15:30，最近已运行任务返回码均为0。任务不经过可见 cmd/BAT 窗口。
 
 ## 当前执行索引：源链接保留与导航结果防护（2026-09-02）
@@ -562,12 +594,11 @@
   - 验证：14 个计划时段均有最终成功且可审计的 run_id；每批记录开始/结束时间和总耗时；失败必须修复并补跑；输出成功率、单批/P50/P95耗时、HTML体积、磁盘峰值、抓取异常、写回和清理汇总
   - 阶段记录（2026-08-25）：稳定性窗口固定为2026-08-25～2026-08-31，每天07:30、15:30。首个07:30时段由`20260825_085431`于08:54手动补跑，其余13个时段交由Windows任务计划程序。只有每个时段最终成功、证据齐全并完成至少一次受控失败恢复演练后才计入14/14；当前计数须等待首批完成，不提前记成功。
 
-- [ ] Task R1.18：Docker PoC 与部署说明
-  - 依赖：R1.17；R1.17 完成前禁止开始，也不得与 Gate A～D 并行开发
-  - 实现：仅 `worker` 容器；配置持久卷、Windows宿主机路径映射、Secret、健康检查、Asia/Shanghai 时区和日志轮转
-  - 验证：容器内离线测试、US/CA 浏览器 PoC、重启恢复和归档持久化通过；N 列 `file:///` URL 指向真实 Windows 宿主机文件
+- [x] Task R1.18：Docker PoC 与部署说明（按 2026-09-11 决策取消）
+  - 处理：不再实现或维护 Dockerfile、Compose、容器入口、容器 cron、镜像迁移和 Linux Feedback bridge；对应文件与专用静态测试已删除。
+  - 交付边界：生产只使用 Windows 宿主机本地 `.venv`、Chromium/紫鸟会话和隐藏计划任务。历史 Docker 构建记录保留在本文件和 `REVIEWS` 的历史段落，仅作追溯，不计入当前支持矩阵。
 
-> Phase R1 完成定义：R1.1～R1.18 全部通过，各任务验证证据和提交号已记录；Docker 不作为任何业务功能的前置条件。
+> Phase R1 完成定义：R1.1～R1.17 按各自验收证据完成；R1.18 已取消，不再作为部署前置条件。当前生产部署唯一支持 Windows 宿主机本地路径。
 
 ## 折扣准确性修正（2026-08-25）
 

@@ -1,12 +1,44 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-11 Docker方案取消、宿主机本地交付边界（最新）
+
+- 根据最新决策，本项目不再支持 Docker。`deploy/docker/` 下的 Dockerfile、Compose、entrypoint 和迁移说明，以及 Docker 专用静态测试已从当前工作区删除；历史构建记录仅保留作追溯，不能作为当前部署选项。
+- 当前唯一生产路径是 Windows 宿主机本地：项目 `.venv`、本机 Chromium/DrissionPage、已授权紫鸟/ZClaw 会话、隐藏 Windows 计划任务和本机 `outputs/data/tmp/htmls` 数据目录。不得启用第二套容器或并发调度器。
+- 本轮只修改本地工作区，未写入飞书、未重启或变更 Windows 计划任务、未提交或推送 GitHub。完整离线回归、Python 编译、PowerShell/JSON 解析和 `git diff --check` 已重新执行并通过；本轮未进行生产全量抓取。
+- `AMAZON_PROXY`、`AMAZON_FEEDBACK_ENABLED` 等仍可作为宿主机运行时覆盖，但不再与 Docker 绑定；启用 Feedback 仍要求本机两店紫鸟会话、固定 Sheet 和选择器已通过只读验收。
+- `docs/README.md` 已与 SPEC/代码/测试统一：BSR 与 AC 独立提取，但同一当前 ASIN 同时出现时按当前业务唯一性门禁共同判定为 `fail`，并保留冲突证据。
+- 旧批次 `20260911_073004` 是修复前运行，价格/前端 `0` 行写入、`719` 行阻断，不能作为修复后验收；下一次真实 Windows 计划窗口仍需完成最小单点、18表全量、固定表写后回读和通知验收。计划任务当前因权限不足无法在本会话读取其实际启用/隐藏状态。
+
+## 2026-09-11 浏览器启动修复与真实单点复核（最新）
+
+- 根因已拆分为两类：旧固定9222会话/Chrome 152 + DrissionPage 4.1.1.4 的CDP启动兼容问题，以及未显式配置Amazon出口时商品导航进入`chrome-error://chromewebdata/`的外部网络问题。前者已修复；后者不再被误报为ASIN身份错配。
+- `AmazonBrowser`现默认使用受控随机CDP端口（`9222-19222`）、本机原生UA和`--remote-allow-origins=*`、`--disable-gpu`、`--no-sandbox`。启动、setup、导航False/doc_loadedFalse、Chrome错误页和关闭阶段均写入`outputs/logs/run_*.log`，参数中的受管用户目录脱敏；Secret/Cookie/Authorization不落盘。
+- 导航安全门禁已调整为：DrissionPage返回False不等于立即失败，只有当前URL同时匹配目标Marketplace域名和请求ASIN才继续DOM门禁；跨站、不同ASIN、空URL及Chrome错误页立即阻断。这样既兼容“URL已切换但等待超时”的真实慢页面，也杜绝读取上一Tab残留商品。
+- 回归套件在删除 Docker 专用测试后现为`351/351`通过；覆盖setup目标域名放行/错误域名阻断、导航False的ASIN绑定、doc_loaded超时、Chrome错误页分类、日志兼容、代理参数脱敏和Feedback运行时开关。Python编译检查通过。
+- 真实只读US单点（显式`AMAZON_PROXY=127.0.0.1:7897`）`B0C5R56QTF`：13:28:31启动至13:29:16结束，CDP启动1.155s，`status=ok`、USD、展示价39.99；真实只读CA单点`B0BNDLKP54`：13:29:32至13:30:29，启动1.390s，`status=ok`、CAD、`M5V 3A8`位置验证、展示价69.99。证据：`outputs/poc_resources/r1_7_us_B0C5R56QTF.json`、`r1_7_ca_B0BNDLKP54.json`及`outputs/logs/run_20260911_1328.log`、`run_20260911_1329.log`；结束后无残留浏览器进程。
+- 未设置`config.proxy`/`AMAZON_PROXY`的US对照运行已正确落为`crawl_error`，错误为`navigation_failed: Chrome错误页 chrome-error://chromewebdata/`；这证明浏览器已启动，失败属于没有可用Amazon网络出口。项目不会静默继承通用`HTTP_PROXY/HTTPS_PROXY`，生产须明确配置Amazon代理或确认紫鸟/VPN出口。
+- 待办：在下一次实际计划窗口用目标设备的显式Amazon出口完成全量18子表、固定飞书表写后回读和通知验收；本次单点不能替代全量风控/CA重定向验收。
+
+## 2026-09-11 US代理位置与CA邮编策略复核（最新）
+
+- 复核确认此前US入口确实默认传入 `90210` 并执行地址设置；这不是当前代理IP的可靠证明，也可能覆盖代理/VPN出口对应的Amazon位置。
+- 已将生产默认切为 `us_location_mode=proxy`：US只导航 `www.amazon.com`，不设置邮编或 `sp-cdn`，由实际紫鸟/VPN/显式浏览器代理提供出口位置；最终商品host和币种门禁仍保留。
+- 当前 `config.proxy` 为空；系统通用HTTP代理变量不会被项目自动继承。若生产需要固定代理，须显式设置 `proxy` 或 `AMAZON_PROXY`，否则只能把已生效的紫鸟/VPN视为US出口来源。
+- CA保持 `ca_location_mode=postal`：只导航 `www.amazon.ca`，只设置并回读 `M5V 3A8`，不把邮编附加到商品URL；不再复用US邮编。
+- 完整离线回归 `344/344` 通过，未产生飞书写入或通知。本次在线US/CA复测尚未执行，因此不能把代理出口位置或全量成功率宣称为已验收；下一次应在真实代理环境各跑一条并回读日志/bundle。
+- 同轮还发现 Windows Chrome 152 的两个独立启动兼容点：CDP WebSocket 因缺少 `--remote-allow-origins=*` 返回403，GPU子进程因主机环境崩溃。已在 `crawler.py` 统一增加参数，并增加CA首页跨域重定向早期阻断；当前主机的真实PoC仍需在浏览器进程能稳定响应后再完成。
+
 ## 2026-09-11 Amazon残缺商品页根因与熔断修复（最新）
 
 - 本轮全量 `20260911_073004` 已安全完成投递：A:G和N:T各719行已同步，H:M仅0行写入，Feedback写入11行；不存在错误价格覆盖。
 - US `B0C5R56QTF` 与 CA `B0BN5988BX` 的异常证据截图均显示商品详情主体未加载，仅余顶部导航和推荐卡。页面标题、URL、ASIN、邮编和域名均正确，故不是源链接或身份错配。
 - 已在 `app/amazon/crawler.py` 加入商品结构 shell 证据、推荐卡价格排除、`incomplete_product_page` 分类与同子表连续8条熔断。无明确售罄证据时，该页不再写成售罄或零价格。
-- 在线复测 US `20260911_100819`、CA `20260911_101439` 均得到 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；CA `B0D9NT9JQN` 仍确认 `amazon.ca`/CAD/邮编有效。新分类已生效，但不代表当前 Amazon 出口已恢复；恢复前仍需切换/验证可用出口后做 US、CA各一条正常商品测试。
+- 旧 UA/旧地址等待逻辑下的在线复测 US `20260911_100819`、CA `20260911_101439` 均得到 `crawl_error/incomplete_product_page`，shell=`title:false, main_image:false, center:true, buybox:false, price:false, availability:false`；后续 A/B 证明主要原因是固定 Chrome/124 与当前 Chromium/152 不一致并叠加地址弹窗时序，而不是单纯 Amazon 出口。修复后 US/CA 正常样本已分别通过，CA 重定向 ASIN仍按身份门禁阻断。
 - 本轮无网络发布、无飞书表格变更；新策略首次全量验收和 Amazon 出口恢复仍是未完成边界。
+- 专门回归覆盖已补齐：`tests/test_review_regressions.py` 新增残缺商品页 shell 明确分类、推荐卡等待隔离、慢地址弹窗等待，以及残缺页只重建一次、不进入长风险冷却的重试行为；完整离线套件现为 `342/342` 通过。离线通过仍不等价于 Amazon 实时出口恢复。
+- 真实浏览器单点复测 `20260911_105130`（PD03/B0C5R56QTF）已完成：实际 Amazon 页面返回正确商品标题和请求 URL，但详情主体 shell 仍为 `title:false, main_image:false, center:true, buybox:false, price:false, availability:false`，因此安全返回 `crawl_error/incomplete_product_page`，未写生产飞书。该结果证明在线入口和新门禁生效，同时确认当前出口/会话仍有外部页面降级边界；证据见 `outputs/debug/20260911_105130/PD03/B0C5R56QTF/`、`outputs/daily_runs/2026-09-11/20260911_105130_weekly_bundle.json` 和 `outputs/frontend_online_tests/original_runs/20260911_105130.log`。
+- 根因复测已闭环：本机实际 Chrome 为 152，而旧代码固定发送 `Chrome/124`；原生 UA A/B 直接恢复商品节点，随后修复代码真实复测 `20260911_112315` 得到 `status=ok`、价格 `39.99`、价格一致 `✅(0.00)`，主图/品牌故事/尺寸/BSR/父子ASIN/环保均 `pass`，AC 为页面事实 `fail`。同一入口、同一 ASIN、同一 US 邮编，不再出现残缺 shell；证据见 `outputs/daily_runs/2026-09-11/20260911_112315_weekly_bundle.json` 和 `outputs/frontend_online_tests/original_runs/20260911_112315.log`。
+- CA 复测进一步区分了两类问题：`B0D9NT9JQN` 被真实页面重定向到 `B0BNDLKP54`，因此 `identity_mismatch` 是正确保护；直接请求落地 ASIN `B0BNDLKP54` 在 `20260911_112722` 已正常返回 CAD/邮编通过/价格 `69.99`/`✅(0.00)`。当前不应放宽身份门禁，而应把前者保留为源链接重定向恢复项。
 
 
 ## 2026-09-11 明早任务发布前审查（最新）
@@ -202,7 +234,7 @@
 ## 2026-09-02 全新源快照全量审查
 
 - 已完成全新第5代源快照 `20260902_121541` 的18表719行全量抓取；507条成功、178条请求ASIN被Amazon重定向为其他ASIN、5条解析异常、29条源数据无效。身份不一致已从`crawl_error`独立为`identity_mismatch`：仍逐行阻断、保留证据、重建Tab重试，但不再误报为浏览器/网络技术异常。固定结果表实际写入536行，183行进入阻断/恢复清单，批次明确标记 `partial`，没有把异常当作零价或售罄。
-- 已确认本轮只发送给周成业：通知回执 `outputs/daily_runs/2026-09-02/20260902_121541_notifications.json` 仅有1个成功 `open_id`。`--notify-manager-only` 是一次性命令开关，不持久化默认协作者配置；后续Windows/Docker正常入口不带该参数，自动恢复应用协作者范围。
+- 已确认本轮只发送给周成业：通知回执 `outputs/daily_runs/2026-09-02/20260902_121541_notifications.json` 仅有1个成功 `open_id`。`--notify-manager-only` 是一次性命令开关，不持久化默认协作者配置；后续Windows宿主机正常入口不带该参数，自动恢复应用协作者范围。
 - 已确认价格任务未下载HTML，bundle中没有 `html_path`；价格与HTML仍是独立生命周期。历史HTML不删除。
 - 加拿大仍是主要风险边界：本轮计数为CAD 170，但CPD存在成组 `crawl_error`/`identity_mismatch`，不能认为CPD已生产级稳定；需按失败原因和源链接继续做小批恢复，不放宽最终ASIN身份门禁。
 - 单点复测已确认这不是残留Tab误读：US `B0DRKD4LQC` 经3次新Tab请求后仍从 `/dp/B0DRKD4LQC` 落到 `B0BY1Z43FP`；CA `B0BNDLKP54` 在邮编验证、CAD证据正常时仍落到 `B0D9NT9JQN`。因此缺少精确源Amazon URL或跨站ASIN映射时，代码不能安全把落地商品价格归给原ASIN；需要在周报提供精确链接或增加经过人工确认的CA映射表。
@@ -216,10 +248,10 @@
 - 临时补跑 `20260907_154131` 已启动并安全停止于源快照发现阶段：新快照 `PD05` 的表头为 `ASIN\n(...)`，旧的“必须完全等于 ASIN”检测将其误判为未知 Marketplace；未抓取 Amazon、未写固定结果表，异常通知已送达周成业。
 - 已修复 ASIN 表头识别：允许 `ASIN` 后的换行/括号说明，同时拒绝 `ASIN_CODE` 等近似字段；对该临时快照只读复核结果为21张表、18张业务表映射、3张辅助表排除、0张未知、0个重名。
 
-## 2026-09-02 Docker迁移审查
+## 2026-09-02 Docker迁移审查（历史记录，方案已取消）
 
 - 已修复Docker骨架的可运行性问题：`.dockerignore`排除 `tests` 时Dockerfile仍 `COPY tests`、系统cron文件被错误传给用户级 `crontab`、cron日志父目录未创建，以及 Compose `init: true` 与镜像内 `tini` 双重包装；当前仅保留镜像内 `tini` 作为 PID 1。
-- Docker Desktop Linux 引擎上已完成真实镜像构建、容器内 Chromium/编译、使用镜像依赖的269项回归，以及短启动健康检查：`amazon-daily:latest` 为 Linux/amd64、约334.6MB，入口成功加载18个子表，健康状态`healthy`，随后已停止并清理容器。该短启动未到cron时点，未抓Amazon、未写飞书、未发通知。仍需在迁移服务器按同一出口网络进行 US/CA 只读与真实计划时段验收；迁移说明和回滚边界见 `deploy/docker/README.md`。
+- Docker Desktop Linux 引擎上曾完成一次历史镜像构建和短启动检查；该记录不再代表当前支持能力，相关文件已删除，后续生产不得按该记录部署或迁移。
 
 ## 2026-09-02 导航残留页面问题
 

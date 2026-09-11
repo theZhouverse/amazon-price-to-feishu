@@ -28,12 +28,15 @@ class FakeWorker:
     fetched: list = []
 
     def __init__(self, headless=True, us_zip='90210', proxy=None, tabs=1,
-                 marketplace='US', postal_code=None):
+                 marketplace='US', postal_code=None, location_mode=None,
+                 browser_auto_port=True, browser_no_sandbox=True,
+                 browser_disable_gpu=True, logger=None):
         self.tab = mock.MagicMock()
         self.tab.html = '<html></html>'
         self.proxy = proxy
         self.marketplace = marketplace
         self.postal_code = postal_code
+        self.location_mode = location_mode
         self._tabs = [mock.MagicMock() for _ in range(max(1, tabs))]
         self._free = list(self._tabs)
 

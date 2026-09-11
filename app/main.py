@@ -323,7 +323,13 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
                 save_sheet_cache(run_id, sheet, rows, crawls, cfg)
             logger.info(f'[缓存] {sheet} 增量保存 {len(snapshot)} 条')
 
-        postal_code = cfg['ca_postal'] if marketplace == 'CA' else cfg['us_zip']
+        location_mode = (cfg.get('ca_location_mode') if marketplace == 'CA'
+                         else cfg.get('us_location_mode')) or (
+                             'postal' if marketplace == 'CA' else 'proxy')
+        # US 默认信任代理出口，不传入兼容旧配置的 90210；CA 才传入
+        # 独立加拿大邮编，并且永远不会把邮编拼到商品 URL。
+        postal_code = (cfg['ca_postal'] if marketplace == 'CA'
+                       and location_mode == 'postal' else None)
         if circuit_open.is_set():
             return [CrawlResult(
                 asin=row.asin, run_id=run_id, marketplace=marketplace,
@@ -335,7 +341,12 @@ def run_fetch(run_id: str, sheet: str, rows: list[ReportRow], cfg: dict,
         browser = AmazonBrowser(headless=headless, us_zip=cfg['us_zip'],
                                 proxy=cfg.get('proxy') or None,
                                 tabs=workers, marketplace=marketplace,
-                                postal_code=postal_code)
+                                postal_code=postal_code,
+                                location_mode=location_mode,
+                                browser_auto_port=bool(cfg.get('browser_auto_port', True)),
+                                browser_no_sandbox=bool(cfg.get('browser_no_sandbox', True)),
+                                browser_disable_gpu=bool(cfg.get('browser_disable_gpu', True)),
+                                logger=logger)
         archive_enabled = bool(cfg.get('html_archive_enabled', False))
         storage = None
         archiver = None
@@ -1794,20 +1805,31 @@ def amazon_marketplace_poc_flow(cfg: dict, logger, args) -> None:
     marketplace = args.amazon_poc_marketplace
     asin, product_url = normalize_product(args.amazon_poc_asin, marketplace)
     profile = MARKETPLACES[marketplace]
-    postal = cfg['ca_postal'] if marketplace == 'CA' else cfg['us_zip']
+    location_mode = (cfg.get('ca_location_mode') if marketplace == 'CA'
+                     else cfg.get('us_location_mode')) or (
+                         'postal' if marketplace == 'CA' else 'proxy')
+    postal = (cfg['ca_postal'] if marketplace == 'CA'
+              and location_mode == 'postal' else None)
     row = ReportRow(row_num=0, asin=asin, marketplace=marketplace,
                     product_url=product_url)
     browser = AmazonBrowser(
         headless=not args.no_headless, us_zip=cfg['us_zip'],
         proxy=cfg.get('proxy') or None, tabs=1,
-        marketplace=marketplace, postal_code=postal)
+        marketplace=marketplace, postal_code=postal,
+        location_mode=location_mode,
+        browser_auto_port=bool(cfg.get('browser_auto_port', True)),
+        browser_no_sandbox=bool(cfg.get('browser_no_sandbox', True)),
+        browser_disable_gpu=bool(cfg.get('browser_disable_gpu', True)),
+        logger=logger)
     tab = None
     try:
         if not browser.setup(strict_location=True):
             p(logger, f'区域设置失败阶段: {browser.location_error} | '
                       f'page={getattr(browser.page, "url", "")} | '
                       f'title={str(getattr(browser.page, "title", ""))[:120]}')
-            raise RuntimeError(f'{marketplace} 邮编设置未能回读验证，禁止继续商品抓取')
+            raise RuntimeError(
+                f'{marketplace} 区域上下文初始化未通过: '
+                f'{browser.location_error or "unknown"}；禁止继续商品抓取')
         tab = browser.acquire()
         result, tab = browser.fetch_with_retry(tab, row, cfg)
         html = tab.html or ''
