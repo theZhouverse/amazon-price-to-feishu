@@ -1,5 +1,33 @@
 # TASKS: Amazon Daily
 
+## 2026-09-11 BSR当前DOM可见性与详情表边界修正（最新）
+
+- [x] 复核历史 `B0DQTFFRCN`：`Best Sellers Rank` 位于当前商品 `#prodDetails` 下的一张 `.a-keyvalue.prodDetTable` 中，同表 `ASIN` 行为 `B0DQTFFRCN`，不是推荐商品或其他 ASIN；但其祖先 `.a-expander-content` 为 `style="display:none"`、`data-expanded="false"`，当前页面实际没有显示 BSR。
+- [x] 修正 BSR 规则：精确匹配当前详情表中的 `th.prodDetSectionEntry`，同表 ASIN 行必须等于请求 ASIN；表根为表格时只在最近表格拓扑内找 ASIN，拒绝从嵌套表/推荐卡借用；BSR 行或祖先隐藏时不再判定 `pass`，返回 `fail` 并保留 `[hidden]` 定位和“折叠隐藏”原因。
+- [x] 保持 BSR 与 AC 独立：同一当前商品可分别出现可见 AC 徽章和 BSR 字段；只有各自的当前 ASIN、容器和可见性条件满足时才通过，不能互相覆盖为 `ASIN不合法`。
+- [x] 规则版本升级为 `2026-09-11-v16`。B0DQTFFRCN 原始历史文件现在应为 BSR=`fail`（折叠隐藏）、AC=`fail`（离线容器为空）；若实时页面在同一绑定容器中动态渲染可见 AC，AC 才可独立为 `pass`。
+- [x] 新增隐藏 BSR 回归与嵌套表边界保护；完整离线回归 `361/361` 通过，`compileall` 与 `git diff --check` 通过。该验证仍不替代下一次真实浏览器在线验收。
+
+## 2026-09-11 AC/BSR真实DOM规则修正（最新）
+
+- [x] 按实际商品页 DOM 复核：AC 的有效证据是当前商品 `#acBadge_feature_div` 内可见的 `span.a-size-small`（或同等实际 badge 节点）文本，规范化后精确为 `Amazon's Choice`；隐藏的 `a-popover-preload` 说明、推荐卡、其他 ASIN 和空占位不计入。
+- [x] BSR 的有效证据仍是当前商品详情树中的 `<tr>`，其中 `<th class="prodDetSectionEntry">Best Sellers Rank</th>`；详情表必须属于当前请求 ASIN，支持 `ASIN` 行或祖先 `data-csa-c-asin/data-asin` 绑定，导航/推荐/其他 ASIN 的同名文字不计入。
+- [x] 移除错误的“同一 ASIN 同时检测到 BSR 和 AC 就两列 `fail`”覆盖。Amazon 正常 DOM 可能同时存在详情表 `Best Sellers Rank` 行和可见 AC 徽章；Q/T 现在分别按各自事实输出，不再将已识别的 AC 改写为 `ASIN不合法`。
+- [x] 实时浏览器 AC 证据采集与静态解析规则对齐：页面身份可从 `#ASIN`、`#title_feature_div` 或当前商品 URL取得；AC 容器的 ASIN 绑定支持从自身及祖先 DOM 节点读取，并继续在同一快照递归检查开放 Shadow DOM。
+- [x] （历史 v15）新增实际 `a-size-small` 徽章、同页 BSR+AC、隐藏说明和错误 ASIN 回归；BSR 折叠可见性规则已由顶部 v16 补充并覆盖。
+- [x] 按项目约定设置 `PYTHONPATH=app;tests` 完整离线回归 `360/360` 通过（unittest 内部约 `2.857s`）；`compileall` 和 `git diff --check` 通过。该验证不替代下一次真实浏览器在线只读验收。
+- [ ] 待在线验收：用下一次只读浏览器运行抽取至少一条明确显示 AC 的商品和一条明确仅显示 BSR 的商品，回读 bundle 中 `observed/status/evidence_locator`；未完成前不恢复生产计划任务或写固定结果表。
+
+## 2026-09-11 周报动态子表与可变中间字段兼容（最新）
+
+- [x] 源快照发现改为遍历飞书元数据中的全部子表，保留源表顺序，不再把配置中的旧 `sheets` 列表当作全量上限；因此新增四个业务子表会自动进入本批映射和固定结果表同步。已知 `PD`/`XD`/`PDF` 与 `CPD` 前缀继续分别路由 US/CA；描述性新表名在完整业务表头下可由明确的 US/CA 国家标题或 ASIN 单元格单一 Amazon URL 自动推断，纯 ASIN 无线索或混合站点保持未知并阻断。
+- [x] 新增统一源表 schema 解析：`ASIN`、`SKU`、`尺寸/商品尺寸`、`正常售价/正常价格`、`本周折扣形式/本周折扣类型`、`本周折扣%`（含全角百分号）和 `目标成交价/目标价格` 均按规范化表头定位。解析器选取从左到右的第一处业务字段；后段辅助区的重复字段（现有 PD03/PD05 确实存在）只写入 `source_schema.duplicate` 审计，不覆盖主字段。中间插入、移动或追加辅助字段不会改变读取；缺失字段在抓取前明确报“源表字段结构不兼容”，不再使用旧绝对列号兜底。
+- [x] 飞书读取按子表实际列容量分段；上传 XLSX 按工作表 `max_column` 读取，修复原先固定读取到 O 列造成的宽表截断。发现报告现在附带 `source_schema.columns/missing/duplicate`，可审计新增子表是否被纳入或为何阻断。
+- [x] 固定结果表仍使用现有 A:V 位置和字段顺序；源表新增/移动列只影响 A:G 的字段来源，不创建第二结果表、不改变 H:V。新增回归覆盖“插入中间列仍读对字段”“后段重复表头审计且首列优先”“缺失字段不回退旧列”“四个描述性新表按明确 URL 自动发现”。
+- [x] 定向验证：`test_report_reader` 与 `test_weekly_mapping` 共 18 项通过；并用 seq-4 真实快照的 18 份历史表头复核，PD03/PD05 的后段重复字段被正确审计且主字段仍取首列。本轮未执行飞书写入、Amazon 抓取或通知，四条 Windows 计划任务仍保持暂停。
+- [x] 完整离线回归：PowerShell 中设置 `$env:PYTHONPATH='app;tests'` 后执行 `.venv\\Scripts\\python.exe -m unittest discover -s tests -p 'test_*.py' -q`，共 `359` 项通过，命令墙钟约 `3.813s`（unittest 内部约 `3.078s`）；`compileall` 和 `git diff --check` 均通过。
+- [ ] 在线验收待下一次真实周报更新后完成：只读发现报告需确认实际新增四个子表的标题、Marketplace、schema 完整性和映射顺序；确认固定结果表新增对应子表并逐段回读后，再考虑恢复计划任务。
+
 ## 2026-09-11 今日手动全量读取（无邮编 CA，最新）
 
 - [x] 在四条 Windows 计划任务均暂停的状态下，手动按周五下午槽位 `weekday_1530` 启动正式全量：run_id `20260911_154123`，来源 `period_id/source_period_id=seq-4`，`selection_mode=weekday_steady`，未切换周报。
@@ -83,10 +111,10 @@
 - [x] 本轮16个代码、测试和关联文档文件已固定为本地提交`29d4a3c`（`fix: harden frontend rules and scheduled slots`）；当前未推送远程，不把本地提交误报为GitHub已更新。
 - [ ] 2026-09-11 07:30真实全量仍是最终在线验收：需核对scheduler START/END与UTF-8、`weekday_0730/weekday_steady/seq-4`、18表写入/阻断、CA身份异常、Feedback增量3日/10日留存、固定表回读和全员通知。计划任务存在与单条预跑不能替代该结果。
 
-## 2026-09-10 BSR/AC规则按开发SPEC重新对齐（最新）
+## 2026-09-10 BSR/AC规则按开发SPEC重新对齐（历史 v14，已被 v15 替代）
 
 - [x] 对照 `D:\projects\amazon_daily_dev_20260821\docs\SPEC.md` 第5节和第6.1节，确认BSR与Amazon's Choice均需先绑定当前请求ASIN；BSR只读取当前商品详情表中的精确 `Best Sellers Rank` 字段，AC只读取当前商品作用域内的可见实际徽章。
-- [x] 恢复同一当前ASIN同时出现BSR和AC时的业务唯一性门禁：两项保留各自 `observed`、定位和原始证据，但 `bsr_badge` 与 `amazon_choice_badge` 均输出 `fail`，原因明确写入“ASIN不合法”；推荐卡、隐藏说明、其他ASIN和无法绑定的证据仍不计入。
+- [x] （历史 v14）曾恢复同一当前ASIN同时出现BSR和AC时的业务唯一性门禁；该规则已被顶部 `2026-09-11-v16` DOM复核撤回，因为正常商品详情表可与AC徽章同时存在。推荐卡、隐藏说明、其他ASIN和无法绑定的证据仍不计入。
 - [x] 保留现代页面 AC 的可见 Shadow DOM 递归采集及多节点文本拼接能力，避免规则对齐回退为“只读 outerHTML”；规则版本升级为 `2026-09-10-v14`，旧版 v13 bundle 不在新规则下重新解释。
 - [x] 更新生产 `SPEC`、`README`、`REVIEWS` 与本节记录，补充同ASIN双标志冲突的离线回归；未读取或写入飞书表格，未改变结果表列顺序。
 
@@ -204,7 +232,7 @@
 - [x] 在开发副本完成商品结果表N:T七个固定前端列、U/V时间戳和Amazon链接的本地布局模型；前端列显示`✅`/`❌`/`-`，bundle保留原始状态。旧A:P/A:O迁移、写前备份、写后整行回读和尾行清理属于后端/发布分支，不在本分支执行真实云端写入。
 - [x] 新增前端检查模型和bundle字段，内部统一输出`pass`/`fail`/`unknown`；页面404、导航失败、身份不一致等整页门禁时七项均为`unknown`，表格显示`-`，禁止把缺证据写成通过。父子ASIN发散按明确业务标准实现：页面正常且存在至少一个子体/变体ASIN为`pass`，页面正常但零个子体/变体为`fail`，无法确认变体区域为`unknown`。
 - [x] 在同一商品页面DOM和同一浏览器Tab中完成七项检查，禁止为每项检查新增导航；记录expected、observed、reason、evidence_locator、抓取时间和`frontend_check_rule_version`。N列主图与O列`From the brand`品牌故事图片必须独立输出。
-- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice不读取周报预期或上一批值。BSR与AC先分别按当前商品容器输出原始状态；同一ASIN同时出现时按当前 v14 互斥门禁将两项发布为`fail`并保留冲突证据。
+- [x] 实现尺寸预期值读取和规范化比较；BSR、环保标志和Amazon's Choice不读取周报预期或上一批值。BSR与AC先分别按当前商品容器输出原始状态；旧 v14 的互斥覆盖已由当前 v15 撤回，当前同页证据分别发布。
 - [ ] F1：为两个店铺分别登记Seller Central【反馈管理器】URL、非敏感店铺标识、凭证引用和目标上下文；只允许从【最新反馈】区域读取，禁止接入商品Review、Q&A或前台评论。两个店铺必须使用独立会话并串行处理，不得混用页面、分页游标、订单详情或下载状态。
 - [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
 - [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。

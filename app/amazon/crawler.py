@@ -661,14 +661,32 @@ class AmazonBrowser:
                 };
                 const normalizedChoice = (value) => String(value || '')
                     .replace(/\\s+/g, ' ').trim();
-                const choiceRe = /^amazon['’]?s\\s*choice$/i;
-                const pageAsin = String(document.querySelector('#ASIN')?.value || '')
-                    .toUpperCase().trim();
+                const choiceRe = /^amazon['’]?s\\s+choice$/i;
+                const pageIdentity = document.querySelector('#ASIN') ||
+                    document.querySelector('#title_feature_div') ||
+                    document.querySelector('[data-feature-name="title"]');
+                const pageAsin = String(
+                    pageIdentity?.value ||
+                    pageIdentity?.getAttribute('data-csa-c-asin') ||
+                    pageIdentity?.getAttribute('data-asin') || '')
+                    .toUpperCase().trim() ||
+                    String(location.href.match(/\\/(?:dp|gp\\/product)\\/([A-Z0-9]{10})(?:[/?#]|$)/i)?.[1] || '')
+                        .toUpperCase().trim();
+                const boundAsin = (node) => {
+                    let current = node;
+                    while (current) {
+                        const value = String(current.getAttribute?.('data-csa-c-asin') ||
+                            current.getAttribute?.('data-asin') || '').toUpperCase().trim();
+                        if (value) return value;
+                        current = current.parentElement ||
+                            (current.getRootNode?.()?.host || null);
+                    }
+                    return '';
+                };
                 let ac_badge = {visible:false, text:'', locator:'', asin:''};
                 const acRoots = [...document.querySelectorAll('#acBadge_feature_div')];
                 for (const acRoot of acRoots) {
-                    const rootAsin = String(acRoot.getAttribute('data-csa-c-asin') ||
-                        acRoot.getAttribute('data-asin') || '').toUpperCase().trim();
+                    const rootAsin = boundAsin(acRoot);
                     if (!rootAsin || (pageAsin && rootAsin !== pageAsin)) continue;
                     // The class name varies by desktop/mobile experiment. The
                     // bound AC feature container is already a strong scope,

@@ -102,7 +102,7 @@ DEFAULTS = {
         'max_pages': 50,
         'stores': [],
     },
-    # R1.5 正式快照发现的全部业务子表（US 11 + CA 7）
+    # 历史/人工指定子表示例；正式周报运行按快照元数据动态发现，不受此列表限制。
     'sheets': ['PD03', 'PD17', 'PD05', 'PD25', 'XD03', 'XD17', 'PD52', 'PD39', 'PD33',
                'PDF075', 'PD63', 'CPD03', 'CPD17', 'CPD05', 'CPD25', 'CPD39', 'CPD33',
                'CPD52'],
@@ -113,7 +113,7 @@ DEFAULTS = {
         'CPD03': 'CA', 'CPD17': 'CA', 'CPD05': 'CA', 'CPD25': 'CA',
         'CPD39': 'CA', 'CPD33': 'CA', 'CPD52': 'CA',
     },
-    # 原始周报表列位置(1-based)
+    # 历史布局列位置(1-based)，仅供布局检查等非正式解析兜底；生产源读取按表头。
     'source_cols': {
         'asin': 1, 'sku': 2, 'size': 4, 'normal_price': 5,
         'h_type': 8, 'i_value': 9, 'target_price': 11,

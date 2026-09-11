@@ -7,12 +7,14 @@
 """
 import sys
 import unittest
+from io import BytesIO
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from feishu import read_source_rows
+from feishu import FeishuClient, read_source_rows
 from config import DEFAULTS
 
 
@@ -121,6 +123,75 @@ class TestReadSourceRows(unittest.TestCase):
         rows, invalid = read_source_rows(data, mk_cfg())
         self.assertNotIn('B0CLRVSVXG', [r.asin for r in rows])
         self.assertTrue(any(iv['asin'] == 'B0CLRVSVXG' for iv in invalid))
+
+    def test_inserted_intermediate_columns_do_not_change_business_mapping(self):
+        """源表插入/移动辅助列时，业务字段仍按表头读取。"""
+        data = [
+            ['周报说明'],
+            ['辅助', 'SKU', '插入字段', 'ASIN\n(颜色/变体)', '商品尺寸',
+             '正常价格', '中间策略', '本周折扣类型', '本周折扣％', '另一个辅助',
+             '目标价格'],
+            ['x', 'PD-new', 'ignore', 'B0C5R56QTF', "5'X7'", 31.99, 'ignore',
+             '价格折扣', '10%', 'ignore', 28.79],
+        ]
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertFalse(invalid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].asin, 'B0C5R56QTF')
+        self.assertEqual(rows[0].sku, 'PD-new')
+        self.assertEqual(rows[0].size, "5'X7'")
+        self.assertEqual(rows[0].normal_price, Decimal('31.99'))
+        self.assertEqual(rows[0].target_price, Decimal('28.79'))
+
+    def test_duplicate_helper_header_is_audited_but_primary_is_used(self):
+        data = pd03_layout()
+        data[1][11] = '正常售价'
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertFalse(invalid)
+        self.assertEqual(rows[0].normal_price, Decimal('33.99'))
+        from weekly_mapping import source_schema
+        schema = source_schema(data[1])
+        self.assertEqual(schema['columns']['normal_price'], 5)
+        self.assertEqual(schema['duplicate']['normal_price'], 2)
+
+    def test_missing_required_header_does_not_fall_back_to_old_column(self):
+        data = pd03_layout()
+        data[1][4] = '旧字段'
+        with self.assertRaisesRegex(RuntimeError, '缺少字段=normal_price'):
+            read_source_rows(data, mk_cfg())
+
+    def test_uploaded_xlsx_is_not_truncated_at_column_o(self):
+        """上传文件路径也必须读取插入辅助列后的宽表。"""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'PD03'
+        headers = [''] * 22
+        headers[17:24] = ['ASIN', 'SKU', '商品尺寸', '正常价格',
+                          '本周折扣形式', '本周折扣%', '目标成交价']
+        values = [''] * 22
+        values[17:24] = ['B0C5R56QTF', 'PD-wide', "5'X7'", 31.99,
+                         '价格折扣', '10%', 28.79]
+        for col, value in enumerate(headers, start=1):
+            ws.cell(1, col).value = value
+        for col, value in enumerate(values, start=1):
+            ws.cell(2, col).value = value
+        stream = BytesIO()
+        wb.save(stream)
+
+        client = object.__new__(FeishuClient)
+        client.cfg = mk_cfg()
+        client.token = 'test-token'
+        client._token_expires_at = 0
+        client._client = Mock()
+        response = Mock()
+        response.content = stream.getvalue()
+        response.raise_for_status.return_value = None
+        client._client.get.return_value = response
+        rows_by_sheet, _, invalid = client.read_source_file(
+            'file-token', ['PD03'], mk_cfg())
+        self.assertFalse(invalid)
+        self.assertEqual(rows_by_sheet['PD03'][0].target_price, Decimal('28.79'))
 
 
 if __name__ == '__main__':

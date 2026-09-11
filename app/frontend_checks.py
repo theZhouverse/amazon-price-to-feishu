@@ -16,7 +16,7 @@ from decimal import Decimal
 from amazon.price_evidence import Tree, eligible
 
 
-FRONTEND_CHECK_RULE_VERSION = '2026-09-10-v14'
+FRONTEND_CHECK_RULE_VERSION = '2026-09-11-v16'
 FRONTEND_STATUSES = ('pass', 'fail', 'unknown', 'not_applicable')
 FRONTEND_DISPLAY_VALUES = {
     'pass': '✅',
@@ -105,10 +105,9 @@ def _text(node) -> str:
 def _raw_text(node) -> str:
     """Return text inside a node without applying the price parser's hidden rule.
 
-    Amazon places the product-information table, including BSR, in a collapsed
-    ``.a-expander-content`` block in the saved HTML.  That is still the current
-    product's detail field, so BSR uses this bounded raw traversal instead of
-    treating the collapsed block as absent.  Script/style content is ignored.
+    This is a structural traversal only.  Visibility is checked separately by
+    ``_hidden_evidence`` at the point where a check represents a front-end
+    display state.  Script/style content is ignored.
     """
     if node is None:
         return ''
@@ -147,7 +146,7 @@ def _is_global_region(node) -> bool:
 
 
 def _in_non_product_context(node) -> bool:
-    """Reject recommendation/global contexts but allow collapsed product tables."""
+    """Reject recommendation/global contexts while preserving product scope."""
     for ancestor in _ancestor_chain(node):
         attrs = getattr(ancestor, 'attrs', {})
         if str(getattr(ancestor, 'tag', '')).lower() in {
@@ -504,10 +503,27 @@ def _belongs_to_asin(node, asin: str) -> bool:
 
 
 def _detail_table_asin(root) -> str:
-    """Read the ASIN row belonging to one product-details table."""
+    """Read the ASIN row belonging to one product-details table.
+
+    A product-details table may contain nested markup or embedded tables from
+    experiments.  When ``root`` is a table, only rows whose nearest table is
+    that exact root are eligible; an ASIN discovered in a nested table must
+    never be used to bind the outer BSR row.
+    """
+    root_tag = str(getattr(root, 'tag', '')).lower()
     for child in _walk_descendants(root):
         if str(getattr(child, 'tag', '')).lower() != 'tr':
             continue
+        if root_tag == 'table':
+            nearest_table = None
+            current = child
+            while current is not None:
+                if str(getattr(current, 'tag', '')).lower() == 'table':
+                    nearest_table = current
+                    break
+                current = getattr(current, 'parent', None)
+            if nearest_table is not root:
+                continue
         headers = [
             _raw_text(candidate).casefold()
             for candidate in (child, *_walk_descendants(child))
@@ -522,7 +538,20 @@ def _detail_table_asin(root) -> str:
 
 
 def _product_bsr(raw_nodes: list, asin: str = '') -> tuple[bool, str, str]:
-    """Match the BSR field in the current product-information table only."""
+    """Match a *visible* BSR field in the current product-information table.
+
+    Amazon commonly serializes the product-details table inside a collapsed
+    ``.a-expander-content`` with ``display:none``.  That row is useful
+    diagnostic evidence, but it is not a currently displayed front-end BSR
+    marker.  A pass therefore requires all of the following:
+
+    * exact ``Best Sellers Rank`` header in a ``prodDetSectionEntry`` row;
+    * the nearest product-details table is not a recommendation/global region;
+    * the same table has an ``ASIN`` row equal to the requested ASIN (or an
+      explicit current-ASIN binding when the table has no ASIN row);
+    * the BSR row and its ancestors are visible in the captured DOM.
+    """
+    hidden_candidate = None
     for node in raw_nodes:
         if _in_non_product_context(node):
             continue
@@ -543,7 +572,17 @@ def _product_bsr(raw_nodes: list, asin: str = '') -> tuple[bool, str, str]:
         while getattr(row, 'parent', None) is not None and str(getattr(row, 'tag', '')).lower() != 'tr':
             row = row.parent
         observed = _raw_text(row)
+        if _hidden_evidence(row):
+            # Keep the fact for diagnostics, but do not count a collapsed
+            # product-details row as a visible front-end marker.  Continue in
+            # case an experiment rendered a second visible, correctly-bound
+            # row later in the DOM.
+            hidden_candidate = (
+                False, f'{_locator(root)} [hidden]', observed)
+            continue
         return True, _locator(root), observed
+    if hidden_candidate is not None:
+        return hidden_candidate
     return False, '', ''
 
 
@@ -560,10 +599,14 @@ def _product_choice(nodes: list, asin: str = '',
 
     ``#acBadge_feature_div`` often contains a hidden preloaded explanation
     saying that Amazon's Choice highlights highly rated products.  That text
-    is not the badge.  Require an actual descendant whose normalized text is
-    exactly ``Amazon's Choice`` and ignore hidden/preloaded descendants.
+    is not the badge.  The normal desktop DOM is a visible
+    ``span.a-size-small`` inside an ``mvt-ac-badge-rectangle``; require an
+    actual descendant whose normalized text is exactly ``Amazon's Choice``
+    and ignore hidden/preloaded descendants.  The class is treated as a
+    diagnostic shape rather than a hard gate because Amazon experiments use
+    several equivalent badge class names.
     """
-    choice_re = re.compile(r"^amazon['’]?s\s*choice$", re.I)
+    choice_re = re.compile(r"^amazon['’]?s\s+choice$", re.I)
     # Modern Amazon layouts can render the badge inside an open Shadow DOM.
     # ``document.documentElement.outerHTML`` does not contain that subtree, so
     # the crawler supplies a separately captured, visibility-checked marker.
@@ -747,22 +790,21 @@ def inspect_frontend(html, expected_size: str = '', asin: str = '', *,
     eco, eco_locator, eco_observed = _product_eco(raw_nodes, asin)
 
     bsr_status = 'pass' if bsr else 'fail'
-    bsr_reason = ('当前商品详情表存在Best Sellers Rank字段' if bsr
-                  else '当前商品详情表未发现Best Sellers Rank字段')
+    if bsr:
+        bsr_reason = '当前商品详情表存在且当前DOM可见Best Sellers Rank字段'
+    elif '[hidden]' in bsr_locator:
+        bsr_reason = '当前商品详情表存在Best Sellers Rank字段，但当前DOM处于折叠隐藏状态'
+    else:
+        bsr_reason = '当前商品详情表未发现当前可见Best Sellers Rank字段'
     choice_status = 'pass' if choice else 'fail'
     choice_reason = ("当前商品存在Amazon's Choice实际badge" if choice
                      else "当前商品的Amazon's Choice容器为空或不存在")
-    # The development SPEC treats the BSR/AC relationship as a product-level
-    # validity gate: both signals must belong to the requested ASIN, and the
-    # same ASIN cannot be published as having both.  Keep the raw observations
-    # and locators intact so the conflict remains diagnosable rather than
-    # looking like a selector miss.
-    if bsr and choice:
-        invalid_reason = (
-            f'同一 ASIN {requested_asin or str(asin or "").upper()} 同时存在 '
-            "BSR 和 Amazon's Choice，ASIN不合法")
-        bsr_status = choice_status = 'fail'
-        bsr_reason = choice_reason = invalid_reason
+    # BSR and Amazon's Choice are independent presence checks.  Amazon's
+    # product details table can legitimately contain ``Best Sellers Rank`` on
+    # a page that also displays the AC badge.  Do not treat that normal DOM
+    # combination as an ASIN conflict or overwrite a correctly detected AC
+    # badge.  Both checks already have their own current-ASIN scope and
+    # recommendation/hidden-content gates above.
     size_result = _result(
         'size_consistent', observed or '', size_status, size_reason, size_locator, page_url)
     size_result['expected'] = expected

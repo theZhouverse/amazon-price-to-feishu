@@ -87,7 +87,7 @@ class FrontendChecksTest(unittest.TestCase):
         self.assertEqual(checks['brand_story_image']['status'], 'fail')
         self.assertIn('heading=missing', checks['brand_story_image']['observed'])
 
-    def test_bsr_and_choice_together_make_asin_invalid(self):
+    def test_bsr_and_choice_are_independent_when_both_are_present(self):
         checks = inspect_frontend(
             '<div id="prodDetails" data-csa-c-asin="B000000001"><table class="prodDetTable"><tr>'
             '<th class="prodDetSectionEntry">Best Sellers Rank</th><td>#1 in Patio</td>'
@@ -95,14 +95,29 @@ class FrontendChecksTest(unittest.TestCase):
             '<div id="acBadge_feature_div" data-csa-c-asin="B000000001">'
             '<span class="mvt-ac-badge-rectangle">Amazon\'s Choice</span></div>',
             '8x10', 'B000000001', page_url='https://www.amazon.com/dp/B000000001')
-        # Each marker is extracted independently, but the development SPEC
-        # applies a product-level validity gate when both belong to the same
-        # requested ASIN.  Keep the observations while publishing both checks
-        # as fail with an explicit conflict reason.
-        self.assertEqual(checks['bsr_badge']['status'], 'fail')
-        self.assertEqual(checks['amazon_choice_badge']['status'], 'fail')
-        self.assertIn('ASIN不合法', checks['bsr_badge']['reason'])
-        self.assertIn('ASIN不合法', checks['amazon_choice_badge']['reason'])
+        # Amazon commonly exposes the product-details Best Sellers Rank field
+        # and the visible Amazon's Choice badge in the same DOM.  They are
+        # independent existence checks; the details-table field must not
+        # overwrite a correctly detected AC badge.
+        self.assertEqual(checks['bsr_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+        self.assertNotIn('ASIN不合法', checks['amazon_choice_badge']['reason'])
+
+    def test_choice_uses_visible_a_size_small_badge_text(self):
+        checks = inspect_frontend(
+            '<div id="title_feature_div" data-csa-c-asin="B000000001"></div>'
+            '<div id="acBadge_feature_div" data-csa-c-asin="B000000001">'
+            '<div class="a-popover-preload" id="a-popover-amazons-choice-popover">'
+            "Amazon's Choice highlights highly rated, well-priced products"
+            '</div>'
+            '<span class="a-declarative" data-action="a-popover">'
+            '<span class="aok-float-left mvt-ac-badge-rectangle">'
+            '<span class="a-size-small">    Amazon\'s  Choice   </span>'
+            '</span></span></div>',
+            '8x10', 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001?th=1')
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
+        self.assertEqual(checks['amazon_choice_badge']['observed'], "Amazon's Choice")
 
     def test_recommendation_choice_is_not_current_product_evidence(self):
         checks = inspect_frontend(
@@ -133,9 +148,25 @@ class FrontendChecksTest(unittest.TestCase):
             html, '9x12', 'B0DQTFFRCN',
             page_url='https://www.amazon.com/dp/B0DQTFFRCN?th=1')
         self.assertEqual(checks['bsr_badge']['status'], 'fail')
-        self.assertEqual(checks['amazon_choice_badge']['status'], 'fail')
-        self.assertIn('ASIN不合法', checks['amazon_choice_badge']['reason'])
+        self.assertEqual(checks['amazon_choice_badge']['status'], 'pass')
         self.assertEqual(checks['amazon_choice_badge']['observed'], "Amazon's Choice")
+        self.assertIn('折叠隐藏', checks['bsr_badge']['reason'])
+
+    def test_hidden_bsr_row_is_not_a_visible_frontend_marker(self):
+        checks = inspect_frontend(
+            '<div id="title_feature_div" data-csa-c-asin="B000000001"></div>'
+            '<div id="prodDetails">'
+            '<div class="a-expander-content" style="display:none" data-expanded="false">'
+            '<table class="prodDetTable"><tr>'
+            '<th class="prodDetSectionEntry">Best Sellers Rank</th><td>#1 in Patio</td>'
+            '</tr><tr><th class="prodDetSectionEntry">ASIN</th>'
+            '<td class="prodDetAttrValue">B000000001</td></tr></table>'
+            '</div></div>',
+            '8x10', 'B000000001',
+            page_url='https://www.amazon.com/dp/B000000001')
+        self.assertEqual(checks['bsr_badge']['status'], 'fail')
+        self.assertIn('折叠隐藏', checks['bsr_badge']['reason'])
+        self.assertIn('[hidden]', checks['bsr_badge']['evidence_locator'])
 
     def test_choice_passes_when_bsr_is_absent(self):
         checks = inspect_frontend(

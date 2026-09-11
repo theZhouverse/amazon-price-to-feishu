@@ -11,6 +11,21 @@ ASIN_RE = re.compile(r'\b(B0[A-Z0-9]{8})\b', re.IGNORECASE)
 US_SHEET_RE = re.compile(r'^(?:PD|XD|PDF)', re.IGNORECASE)
 CA_SHEET_RE = re.compile(r'^CPD', re.IGNORECASE)
 
+# Source-weekly fields are a contract by business name, not by physical
+# column.  The weekly report is allowed to insert helper/strategy columns in
+# the middle of a tab; keeping this map in one module prevents discovery and
+# row parsing from silently developing different rules.
+SOURCE_FIELD_ALIASES = {
+    'asin': ('ASIN',),
+    'sku': ('SKU',),
+    'size': ('尺寸', '商品尺寸'),
+    'normal_price': ('正常售价', '正常价格'),
+    'h_type': ('本周折扣形式', '本周折扣类型'),
+    'i_value': ('本周折扣%', '本周折扣％'),
+    'target_price': ('目标成交价', '目标价格'),
+}
+SOURCE_REQUIRED_FIELDS = tuple(SOURCE_FIELD_ALIASES)
+
 
 def cell_text(value) -> str:
     if value is None:
@@ -24,6 +39,92 @@ def cell_text(value) -> str:
     return str(value).strip()
 
 
+def normalize_header(value) -> str:
+    """Normalize a source header for matching without changing its display value.
+
+    Feishu may return line breaks, non-breaking/full-width spaces, or full-width
+    punctuation.  These are presentation differences, not schema changes.  We
+    deliberately do not remove arbitrary letters/numbers so fields such as
+    ``ASIN_CODE`` cannot be mistaken for ``ASIN``.
+    """
+    text = cell_text(value).replace('\u00a0', ' ').replace('\u3000', ' ')
+    text = re.sub(r'\s+', '', text)
+    return (text.replace('％', '%').replace('（', '(').replace('）', ')')
+                .casefold())
+
+
+def _is_asin_header(value) -> bool:
+    normalized = normalize_header(value)
+    if normalized == 'asin':
+        return True
+    # ``ASIN(颜色/变体说明)`` is used by some weekly tabs.  Only a parenthesis
+    # annotation is accepted; ASIN_CODE and other similarly prefixed fields are
+    # intentionally rejected.
+    return bool(re.fullmatch(r'asin\([^()]*\)', normalized))
+
+
+def resolve_source_columns(header_row: list, *, require_all: bool = False) -> dict:
+    """Return canonical source field -> 1-based column indexes.
+
+    The left-most occurrence is the primary business column.  Real weekly
+    tabs (notably PD03/PD05) legitimately repeat ``ASIN``/``SKU``/``尺寸`` in
+    later helper blocks; those repeats are retained as discovery warnings and
+    never replace the primary occurrence.  Missing fields are reported
+    separately; callers that parse rows should set ``require_all`` so a schema
+    that cannot supply the business fields fails closed before any price is
+    fetched.
+    """
+    aliases = {
+        key: {normalize_header(name) for name in names}
+        for key, names in SOURCE_FIELD_ALIASES.items()
+    }
+    found: dict[str, list[int]] = {key: [] for key in SOURCE_REQUIRED_FIELDS}
+    for index, cell in enumerate(header_row, start=1):
+        normalized = normalize_header(cell)
+        if not normalized:
+            continue
+        if _is_asin_header(cell):
+            found['asin'].append(index)
+        for key, names in aliases.items():
+            if key != 'asin' and normalized in names:
+                found[key].append(index)
+    duplicate = {key: cols for key, cols in found.items() if len(cols) > 1}
+    missing = [key for key in SOURCE_REQUIRED_FIELDS if not found[key]]
+    if require_all and missing:
+        details = []
+        details.append('缺少字段=' + '、'.join(missing))
+        raise RuntimeError('源表字段结构不兼容：' + '；'.join(details))
+    # Always expose the left-most candidate to callers.  ``source_schema``
+    # separately records later duplicates so they remain visible to reviewers.
+    return {key: cols[0] for key, cols in found.items() if cols}
+
+
+def source_schema(header_row: list) -> dict:
+    """Return an auditable, non-throwing schema summary for discovery."""
+    columns = resolve_source_columns(header_row, require_all=False)
+    duplicate = {}
+    normalized = [normalize_header(value) for value in header_row]
+    for key, names in SOURCE_FIELD_ALIASES.items():
+        accepted = {normalize_header(name) for name in names}
+        if key == 'asin':
+            count = sum(_is_asin_header(value) for value in header_row)
+        else:
+            count = sum(item in accepted for item in normalized)
+        if count > 1:
+            duplicate[key] = count
+    missing = [key for key in SOURCE_REQUIRED_FIELDS if key not in columns]
+    return {
+        'columns': columns,
+        'missing': missing,
+        'duplicate': duplicate,
+        # Duplicate helper headers are expected in some existing reports and
+        # are safe because ``columns`` always points to the left-most primary
+        # occurrence.  Keep the duplicate map for audit rather than treating a
+        # known-valid tab as structurally incomplete.
+        'complete': not missing,
+    }
+
+
 def find_asin_header(values: list[list]) -> tuple[int, int] | None:
     """返回 (1-based 表头行, 1-based ASIN 列)。"""
     for row_index, row in enumerate(values[:10], start=1):
@@ -32,8 +133,7 @@ def find_asin_header(values: list[list]) -> tuple[int, int] | None:
             # ``ASIN\n(颜色...)``。这仍是 ASIN 列，不能因为注释文本而
             # 把整个已知 PD/CPD 子表误判成未知 Marketplace；但不接受
             # ``ASIN_CODE`` 等普通字符串，避免误识别辅助列。
-            header = cell_text(cell)
-            if re.match(r'^ASIN(?:$|[\s(（])', header, re.IGNORECASE):
+            if _is_asin_header(cell):
                 return row_index, col_index
     return None
 
@@ -46,6 +146,54 @@ def col_letter(number: int) -> str:
     return out
 
 
+def infer_marketplace_from_cells(values: list) -> tuple[str | None, str]:
+    """Infer a route only when explicit Amazon URL evidence is unambiguous.
+
+    New business tabs normally keep a ``PD``/``CPD`` prefix, but a future
+    workbook may use a descriptive title.  In that case an explicit URL in the
+    ASIN cells is safe evidence; pure ASIN cells do not contain enough
+    information to choose US versus CA and therefore remain a blocking unknown.
+    """
+    from urllib.parse import urlparse
+    from product_links import URL_RE
+
+    hosts = set()
+    for value in values:
+        # Reuse product_links' recursive flattening so Feishu rich links retain
+        # their link target instead of only their display text.
+        from product_links import _flatten
+        for part in _flatten(value):
+            for raw_url in URL_RE.findall(part):
+                host = (urlparse(raw_url.rstrip(').,;')).hostname or '').lower().rstrip('.')
+                if host in {'amazon.com', 'www.amazon.com', 'smile.amazon.com'}:
+                    hosts.add('US')
+                elif host in {'amazon.ca', 'www.amazon.ca', 'smile.amazon.ca'}:
+                    hosts.add('CA')
+                elif host:
+                    return None, 'unsupported_url_host'
+    if hosts == {'US'}:
+        return 'US', 'asin_url_host_us'
+    if hosts == {'CA'}:
+        return 'CA', 'asin_url_host_ca'
+    if len(hosts) > 1:
+        return None, 'mixed_marketplace_url_hosts'
+    return None, 'no_marketplace_url_evidence'
+
+
+def infer_marketplace_from_title(title: str) -> tuple[str | None, str]:
+    """Infer a route from an explicit country token in a descriptive title."""
+    text = str(title or '').strip().casefold()
+    ca = bool('加拿大' in text or re.search(r'(?<![a-z])(?:ca|canada)(?![a-z])', text))
+    us = bool('美国' in text or re.search(r'(?<![a-z])(?:us|usa|unitedstates)(?![a-z])', text))
+    if ca and not us:
+        return 'CA', 'title_country_ca'
+    if us and not ca:
+        return 'US', 'title_country_us'
+    if ca and us:
+        return None, 'mixed_marketplace_title_tokens'
+    return None, 'no_marketplace_title_evidence'
+
+
 def classify_sheet(title: str, has_asin: bool,
                    has_content: bool = True,
                    headers: list[str] | None = None) -> tuple[str, str]:
@@ -54,10 +202,14 @@ def classify_sheet(title: str, has_asin: bool,
     Weekly workbooks commonly contain a generic ``Sheet20`` sales/export tab with an
     ASIN column.  It is not a price-capture business tab unless it also has the
     price/target headers used by PD/CPD tabs.  Unknown named ASIN tabs remain a hard
-    failure so a genuinely new business tab cannot be silently skipped.
+    failure so a genuinely new business tab cannot be silently skipped.  A
+    descriptive title with an explicit country token is accepted only when the
+    complete business schema is present; URL-based routing is applied later
+    for similarly complete tabs.
     """
-    normalized_headers = {str(item or '').strip() for item in (headers or [])}
-    price_headers = {'正常售价', '目标成交价'}
+    schema = source_schema(headers or [])
+    normalized_headers = {normalize_header(item) for item in (headers or [])}
+    price_headers = {normalize_header('正常售价'), normalize_header('目标成交价')}
     generic_auxiliary = bool(re.fullmatch(r'Sheet\d+', title.strip(), re.IGNORECASE))
     if generic_auxiliary and has_asin and not price_headers.issubset(normalized_headers):
         return 'excluded', 'generic_auxiliary_asin_sheet'
@@ -75,6 +227,10 @@ def classify_sheet(title: str, has_asin: bool,
                 else ('US', 'title_prefix_us_business_empty'))
     if not has_asin:
         return 'excluded', 'no_asin_header_auxiliary'
+    if schema['complete']:
+        hinted, hint_reason = infer_marketplace_from_title(title)
+        if hinted:
+            return hinted, hint_reason
     return 'unknown', 'asin_sheet_with_unknown_title'
 
 
@@ -108,12 +264,14 @@ def build_discovery(fc, snapshot_token: str) -> dict:
         header_values = []
         if located and len(values) >= header_row:
             header_values = [cell_text(v) for v in values[header_row - 1]]
+        schema = source_schema(header_values)
         grid = sheet.get('grid_properties') or {}
         preliminary.append({
             'source_order': order, 'source_sheet': sheet.get('title') or '',
             'source_sheet_id': sid, 'marketplace': marketplace,
             'route_reason': reason, 'header_row': header_row,
             'asin_col': asin_col, 'headers': header_values,
+            'source_schema': schema,
             'row_capacity': grid.get('row_count'),
             'column_capacity': grid.get('column_count'),
             'sheet_has_content': has_content,
@@ -140,6 +298,18 @@ def build_discovery(fc, snapshot_token: str) -> dict:
                  for row in cells]
         item['nonempty_asin_cells'] = sum(bool(text) for text in texts)
         item['preliminary_valid_asins'] = sum(bool(ASIN_RE.search(text)) for text in texts)
+        # A descriptive new tab title has no inherent US/CA route.  Promote it
+        # only when the ASIN cells themselves contain one unambiguous Amazon
+        # host; a pure-ASIN or mixed-host tab remains unknown and blocks rather
+        # than guessing a marketplace.
+        if item['marketplace'] == 'unknown' and item.get('source_schema', {}).get('complete'):
+            inferred, infer_reason = infer_marketplace_from_cells(
+                [row[0] if isinstance(row, list) and row else row for row in cells])
+            if inferred:
+                item['marketplace'] = inferred
+                item['route_reason'] = infer_reason
+            else:
+                item['route_reason'] = f'{item.get("route_reason")};{infer_reason}'
         item['result_sheet'] = (item['source_sheet']
                                 if item['marketplace'] in ('US', 'CA') else None)
         if item['result_sheet']:

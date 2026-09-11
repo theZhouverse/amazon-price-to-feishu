@@ -29,18 +29,6 @@ FEISHU_BASE = 'https://open.feishu.cn/open-apis'
 LEGACY_HEADERS = ['抓取的价格', '抓取的价格折扣', '一致性检查', '抓取时间戳']
 COMPACT_BASE_HEADERS = ['ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式', '本周折扣%', '目标成交价']
 
-# 列名 → 字段键（表头自动定位用）
-_COL_NAME_MAP = {
-    'asin': 'ASIN',
-    'sku': 'SKU',
-    'size': '尺寸',
-    'normal_price': '正常售价',
-    'h_type': '本周折扣形式',
-    'i_value': '本周折扣%',
-    'target_price': '目标成交价',
-}
-
-
 def load_migration_layout() -> dict[str, int]:
     """读迁移记录中的 output_layout（{sheet: start_col}）；无记录返回空"""
     from config import OUTPUT_DIR
@@ -142,15 +130,28 @@ def _detect_header_row(vals: list[list]) -> int:
 
 
 def _resolve_cols(header_row: list, cfg: dict) -> dict:
-    """按表头名定位列（1-based），找不到的字段用 config.source_cols 兜底"""
-    cols = dict(cfg['source_cols'])
-    from weekly_mapping import cell_text
-    for i, cell in enumerate(header_row):
-        s = cell_text(cell)
-        for key, name in _COL_NAME_MAP.items():
-            if s.casefold() == name.casefold():
-                cols[key] = i + 1
+    """按表头名定位列（1-based），保留旧配置作为非生产探针兜底。
+
+    正式源表解析会额外要求完整业务表头（见 ``read_source_rows``）；这里
+    保留宽松行为是为了让布局检查命令继续能够报告部分表头的位置，而不把
+    探针接口与生产写入混在一起。
+    """
+    from weekly_mapping import resolve_source_columns
+    cols = dict(cfg.get('source_cols') or {})
+    cols.update(resolve_source_columns(header_row, require_all=False))
     return cols
+
+
+def _strict_source_cols(header_row: list) -> dict:
+    """Resolve all source fields before reading any data row.
+
+    Do not fall back to historical absolute columns in production.  If a weekly
+    report has inserted, deleted or duplicated a required field, continuing with
+    the old indexes could attach one product's price to another field; a clear
+    structural block is safer than a plausible-looking wrong result.
+    """
+    from weekly_mapping import resolve_source_columns
+    return resolve_source_columns(header_row, require_all=True)
 
 
 _FORMULA_TEXT_PREFIXES = ('=', 'IF(', '=IF(', 'IFNA(', '=IFNA(', 'INDEX(', '=INDEX(')
@@ -191,7 +192,7 @@ def read_source_rows(vals: list[list], cfg: dict,
     hr = _detect_header_row(vals)
     if hr < 0:
         raise RuntimeError('未找到含 ASIN 的表头行，请检查源表结构')
-    cols = _resolve_cols(vals[hr], cfg)
+    cols = _strict_source_cols(vals[hr])
     rows: list[ReportRow] = []
     invalid: list[dict] = []
     for idx, row in enumerate(vals[hr + 1:], start=hr + 2):
@@ -557,7 +558,10 @@ class FeishuClient:
             if sheet not in wb.sheetnames:
                 continue
             ws = wb[sheet]
-            vals = [[ws.cell(r, c).value for c in range(1, 16)]
+            # Do not truncate at column O.  Source weekly tabs may add helper
+            # columns between the business fields (or place a required field
+            # beyond O); the parser resolves columns by header name.
+            vals = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
                     for r in range(1, ws.max_row + 1)]
             try:
                 rows, invalid = read_source_rows(vals, cfg, source_kind='excel')
