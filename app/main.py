@@ -55,7 +55,8 @@ from feishu import FeishuClient, col_letter
 from models import CrawlResult, PageStatus, ReportRow
 from pricing import compute_result, dec
 from weekly_registry import select_current_registry_row, select_for_scheduled_slot
-from weekly_assets import WeeklyAssetStore, initialize_weekly_assets, require_business_ready
+from weekly_assets import (WeeklyAssetStore, initialize_weekly_assets,
+                           require_business_ready, compare_structure_shape)
 from weekly_result import (_read_source_plan, sync_weekly_result_base, base_fingerprint,
                            write_weekly_result_columns)
 from frontend_checks import (frontend_status_counts, FRONTEND_CHECK_RULE_VERSION,
@@ -881,16 +882,23 @@ def create_snapshot_poc_flow(fc: FeishuClient, cfg: dict, logger) -> None:
     copied_structure = fc.wait_spreadsheet_structure(copy_token)
     p(logger, '副本结构读取完成，开始复核原周报未变化')
     source_after = fc.spreadsheet_structure(source_token)
-    if source_before != source_after:
-        raise RuntimeError('复制前后原周报结构指纹发生变化，PoC 停止')
-    if source_before['sheets'] != copied_structure['sheets']:
-        raise RuntimeError('副本与原周报的子表、行列容量或 A1:P10 关键内容不一致')
+    source_stability = compare_structure_shape(source_before, source_after)
+    if not source_stability['compatible']:
+        raise RuntimeError('复制前后原周报稳定结构发生变化，PoC 停止: ' +
+                           '；'.join(source_stability['differences'][:3]))
+    copy_check = compare_structure_shape(source_before, copied_structure)
+    if not copy_check['compatible']:
+        raise RuntimeError('副本与原周报的子表、行列容量结构不一致: ' +
+                           '；'.join(copy_check['differences'][:3]))
 
     pending_path.write_text(json.dumps({
         'name': copy_name, 'token_masked': masked_pending,
         'url': copied.get('url') or '', 'created_at': datetime.now().isoformat(),
         'status': 'validated', 'source_sha256': source_before['sha256'],
         'copy_sha256': copied_structure['sha256'],
+        'source_shape_sha256': source_stability['expected_shape_sha256'],
+        'copy_shape_sha256': copy_check['actual_shape_sha256'],
+        'content_hash_equal': copy_check['content_equal'],
     }, ensure_ascii=False, indent=2), encoding='utf-8')
 
     masked_source = f'{source_token[:5]}...{source_token[-4:]}'

@@ -7,11 +7,96 @@ from unittest.mock import Mock
 
 from weekly_assets import (
     WeeklyAssetStore, assert_result_write_target, initialize_weekly_assets,
-    require_business_ready,
+    require_business_ready, compare_structure_shape, structure_shape_sha256,
 )
 
 
 class TestWeeklyAssets(unittest.TestCase):
+    def test_structure_shape_ignores_volatile_samples_but_keeps_grid_guard(self):
+        source = {
+            'sheet_count': 2,
+            'sheets': [
+                {'title': 'PD03', 'index': 0, 'row_count': 240,
+                 'column_count': 124, 'sample': [['时间戳', 'v1']]},
+                {'title': '辅助表', 'index': 1, 'row_count': 49,
+                 'column_count': 63, 'sample': [['公式结果', 'old']]},
+            ],
+            'sha256': 'before',
+        }
+        copied = {
+            'sheet_count': 2,
+            'sheets': [
+                {'title': 'PD03', 'index': 0, 'row_count': 240,
+                 'column_count': 124, 'sample': [['时间戳', 'v2']]},
+                {'title': '辅助表', 'index': 1, 'row_count': 49,
+                 'column_count': 63, 'sample': [['公式结果', 'new']]},
+            ],
+            'sha256': 'after',
+        }
+        check = compare_structure_shape(source, copied)
+        self.assertTrue(check['compatible'])
+        self.assertFalse(check['content_equal'])
+        self.assertEqual(check['expected_shape_sha256'],
+                         structure_shape_sha256(source))
+
+        changed = dict(copied)
+        changed['sheets'] = [dict(item) for item in copied['sheets']]
+        changed['sheets'][0]['column_count'] = 125
+        rejected = compare_structure_shape(source, changed)
+        self.assertFalse(rejected['compatible'])
+        self.assertIn('column_count', rejected['differences'][0])
+
+    def test_interrupted_initialization_resumes_when_only_content_hash_drifted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WeeklyAssetStore(Path(tmp))
+            shape = [
+                {'title': 'PD03', 'index': 0, 'row_count': 10,
+                 'column_count': 20, 'sample': [['ASIN', 'v']]},
+            ]
+            old_structure = {'sheet_count': 1, 'sheets': shape,
+                             'sha256': 'old-content'}
+            current_structure = {'sheet_count': 1, 'sheets': [
+                {**shape[0], 'sample': [['ASIN', 'recalculated']]},
+            ], 'sha256': 'new-content'}
+            snapshot_structure = {'sheet_count': 1, 'sheets': [
+                {**shape[0], 'sample': [['ASIN', 'snapshot-copy']]},
+            ], 'sha256': 'snapshot-content'}
+            store.save('seq-5', {
+                'schema_version': 1, 'period_id': 'seq-5', 'generation': 1,
+                'snapshot_run_id': '20260914_153004', 'status': 'initializing',
+                'source': {'url': 'https://x/wiki/y',
+                           'spreadsheet_token': 'source', 'type': 'sheet'},
+                'source_structure': old_structure,
+                'snapshot': {'name': 'snapshot', 'spreadsheet_token': 'snapshot',
+                             'url': 'snapshot-url'},
+                'result': {}, 'resource_names': {'snapshot': 'snapshot',
+                                                 'result': 'result'},
+                'history': [], 'business_ready': False,
+            })
+            fc = Mock()
+            fc.cfg = {'feishu_allowed_hosts': ['x']}
+            fc.resolve_wiki_obj.return_value = ('source', 'sheet')
+            fc.spreadsheet_structure.return_value = current_structure
+            fc.wait_spreadsheet_structure.return_value = snapshot_structure
+            fc.list_root_files.return_value = []
+            fc.create_spreadsheet.return_value = {
+                'spreadsheet_token': 'result', 'url': 'result-url'}
+            fc.query_sheets.return_value = [{'sheet_id': 'default'}]
+            fc.ensure_permission_member.return_value = {
+                'member_id': 'ou_admin', 'perm': 'full_access', 'reused': False}
+            selection = SimpleNamespace(period_id='seq-5',
+                                        source_url='https://x/wiki/y', row_number=6)
+            manifest, reused = initialize_weekly_assets(
+                fc, store, selection,
+                {'url': 'https://x/wiki/r', 'spreadsheet_token': 'registry',
+                 'sheet_id': 's1'}, manager_open_id='ou_admin')
+            self.assertFalse(reused)
+            self.assertEqual(manifest['snapshot']['status'], 'ready')
+            self.assertFalse(manifest['snapshot']['copy_integrity']['content_equal'])
+            self.assertEqual(manifest['source_structure']['sha256'], 'old-content')
+            self.assertEqual(manifest['source_structure_current']['sha256'], 'new-content')
+            fc.copy_file.assert_not_called()
+
     def test_lock_rejects_concurrent_initializer(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = WeeklyAssetStore(Path(tmp))

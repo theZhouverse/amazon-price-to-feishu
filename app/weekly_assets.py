@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from contextlib import contextmanager
@@ -116,6 +117,69 @@ def _find_exact(files: list[dict], name: str) -> dict | None:
     return matches[0] if matches else None
 
 
+def structure_shape(structure: dict) -> dict:
+    """Return the stable workbook shape used for copy-integrity checks.
+
+    ``spreadsheet_structure`` also contains an A1:P10 sample and a content
+    hash.  Those cells include formulas, timestamps and operational notes that
+    may legitimately change while a Drive copy is being materialised.  They
+    are valuable audit evidence, but are not a reliable definition of whether
+    the copied workbook has the same shape.  Copy validation therefore uses
+    only ordered sheet identity and grid capacity here; business headers and
+    required fields are validated by ``weekly_mapping`` before any fetch.
+    """
+    sheets = []
+    for item in (structure or {}).get('sheets') or []:
+        sheets.append({
+            'title': str(item.get('title') or ''),
+            'index': item.get('index'),
+            'row_count': item.get('row_count'),
+            'column_count': item.get('column_count'),
+        })
+    return {'sheet_count': len(sheets), 'sheets': sheets}
+
+
+def structure_shape_sha256(structure: dict) -> str:
+    canonical = json.dumps(structure_shape(structure), ensure_ascii=False,
+                            sort_keys=True, separators=(',', ':'), default=str)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def compare_structure_shape(expected: dict, actual: dict) -> dict:
+    """Compare stable workbook metadata and return an auditable diff.
+
+    A positional comparison is intentional: the source order is retained in
+    result-sheet creation and a copy that drops/reorders a tab is unsafe.  A
+    changed formula/value sample does not fail this check; the later dynamic
+    discovery step remains responsible for required business headers and
+    Marketplace routing.
+    """
+    left = structure_shape(expected)
+    right = structure_shape(actual)
+    differences = []
+    if left['sheet_count'] != right['sheet_count']:
+        differences.append(
+            f"sheet_count {left['sheet_count']} != {right['sheet_count']}")
+    for pos in range(max(len(left['sheets']), len(right['sheets']))):
+        before = left['sheets'][pos] if pos < len(left['sheets']) else None
+        after = right['sheets'][pos] if pos < len(right['sheets']) else None
+        if before != after:
+            differences.append(
+                f"sheet[{pos}] {before!r} != {after!r}")
+    expected_content = (expected or {}).get('sha256') or ''
+    actual_content = (actual or {}).get('sha256') or ''
+    return {
+        'compatible': not differences,
+        'differences': differences,
+        'expected_shape_sha256': structure_shape_sha256(expected),
+        'actual_shape_sha256': structure_shape_sha256(actual),
+        'expected_content_sha256': expected_content,
+        'actual_content_sha256': actual_content,
+        'content_equal': bool(expected_content and actual_content and
+                              expected_content == actual_content),
+    }
+
+
 def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_info: dict,
                              recreate: bool = False,
                              manager_open_id: str = '', snapshot_run_id: str = '') -> tuple[dict, bool]:
@@ -171,7 +235,11 @@ def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_in
             raise RuntimeError(f'周报底层必须是 sheet，当前为 {source_type}')
         if fixed and fixed['spreadsheet_token'] in (source_token, registry_info.get('spreadsheet_token')):
             raise RuntimeError('固定结果表不能是原始周报或登记表')
-        source_structure = (old.get('source_structure') if resuming else None) or fc.spreadsheet_structure(source_token)
+        # Always observe the current source, including an interrupted
+        # initialization.  The source may have received formula/helper-column
+        # updates after the copy request; the immutable snapshot remains the
+        # input for the batch, while this observation is kept for audit.
+        source_structure = fc.spreadsheet_structure(source_token)
         files = fc.list_root_files(page_size=200)
 
         history = list((old or {}).get('history') or [])
@@ -191,7 +259,8 @@ def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_in
                 'row_number': selection.row_number,
             },
             'source': {'url': selection.source_url, 'spreadsheet_token': source_token,
-                       'type': source_type, 'structure_sha256': source_structure['sha256']},
+                       'type': source_type, 'structure_sha256': source_structure['sha256'],
+                       'structure_shape_sha256': structure_shape_sha256(source_structure)},
             'snapshot': {}, 'result': {}, 'history': history, 'business_ready': False,
             'resource_names': {'snapshot': snapshot_name, 'result': result_name},
             'source_structure': source_structure,
@@ -200,6 +269,13 @@ def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_in
         }
         if resuming:
             manifest = old
+            # Keep the original source fingerprint for recovery provenance, but
+            # record the latest read separately so a live formula recalculation
+            # cannot make the interrupted batch fail on resume.
+            manifest['source_structure_current'] = source_structure
+            manifest.setdefault('source', {})['structure_sha256_current'] = source_structure['sha256']
+            manifest.setdefault('source', {})['structure_shape_sha256_current'] = \
+                structure_shape_sha256(source_structure)
         store.save(period_id, manifest)
 
         saved_snapshot = manifest.get('snapshot') or {}
@@ -214,9 +290,14 @@ def initialize_weekly_assets(fc, store: WeeklyAssetStore, selection, registry_in
         }
         store.save(period_id, manifest)
         snapshot_structure = fc.wait_spreadsheet_structure(snapshot_token)
-        if snapshot_structure['sheets'] != source_structure['sheets']:
-            raise RuntimeError('正式快照与原周报结构不一致')
+        structure_check = compare_structure_shape(source_structure, snapshot_structure)
+        if not structure_check['compatible']:
+            detail = '；'.join(structure_check['differences'][:3])
+            raise RuntimeError(f'正式快照与原周报结构不一致（稳定结构）：{detail}')
         manifest['snapshot']['structure_sha256'] = snapshot_structure['sha256']
+        manifest['snapshot']['structure_shape_sha256'] = \
+            structure_check['actual_shape_sha256']
+        manifest['snapshot']['copy_integrity'] = structure_check
         manifest['snapshot']['status'] = 'ready'
         snapshot_access = fc.ensure_permission_member(
             snapshot_token, 'sheet', manager_open_id)
