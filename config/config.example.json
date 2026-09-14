@@ -82,6 +82,9 @@
     "detail_wait_max": 12.0,
     "max_pages": 50,
     "browser_visibility": "background",
+    "auth_retry_attempts": 1,
+    "auth_retry_wait_min": 5.0,
+    "auth_retry_wait_max": 10.0,
     "stores": [
       {
         "key": "store_a",

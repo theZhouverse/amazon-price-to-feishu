@@ -24,6 +24,7 @@ from seller_feedback import (  # noqa: E402
     publish_feedback_sheet,
     run_feedback_pipeline,
     save_feedback_state,
+    _is_retryable_auth_failure,
 )
 
 
@@ -216,6 +217,38 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(report['status'], 'auth_error')
         self.assertEqual(report['stores']['store_a']['status'], 'auth_error')
         self.assertEqual(report['stores']['store_b']['status'], 'auth_error')
+
+    def test_login_redirect_is_retried_once_then_can_recover(self):
+        calls = {'count': 0, 'delays': []}
+
+        def collector(**_):
+            calls['count'] += 1
+            if calls['count'] == 1:
+                raise RuntimeError(
+                    'SafetyStop: Seller Central login redirect '
+                    'https://sellercentral.amazon.com/ap/signin')
+            return {'source_url': 'https://sellercentral.example/feedback', 'pages': []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            report = collect_feedback(
+                'retry-run', {'store_a': collector}, Path(temp),
+                window=feedback_window(NOW), store_order=('store_a',),
+                auth_retry_attempts=1, auth_retry_wait_min=1,
+                auth_retry_wait_max=1,
+                retry_sleep_fn=lambda delay: calls['delays'].append(delay),
+            )
+        self.assertEqual(report['status'], 'ok')
+        self.assertEqual(calls['count'], 2)
+        self.assertEqual(calls['delays'], [1.0])
+        self.assertEqual(report['stores']['store_a']['auth_retry_count'], 1)
+
+    def test_non_transient_auth_and_risk_errors_are_not_retried(self):
+        self.assertTrue(_is_retryable_auth_failure(
+            RuntimeError('page redirected to /ap/signin')))
+        self.assertFalse(_is_retryable_auth_failure(
+            RuntimeError('keychain apiKey item not found')))
+        self.assertFalse(_is_retryable_auth_failure(
+            RuntimeError('captcha challenge on Seller Central')))
 
     def test_state_advances_only_after_two_store_readback(self):
         report = {

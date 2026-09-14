@@ -5,7 +5,9 @@
 - 规格已明确：Feedback列 I 的`获取时间戳`使用父任务开始时的`execution_started_at`（Asia/Shanghai带时区ISO），不是写入完成时间；完整两店采集并通过固定表回读才刷新全部保留行，partial/blocked/auth_error保留旧时间。
 - `_run_feedback_stage`已把周报任务起始时间显式传入Feedback pipeline；报告和bundle同时记录`feedback_execution_started_at`，因此可把云端时间戳与本地任务开始时间直接比对。
 - CLI只读帮助确认`store open`支持`--headless`；生产适配器已固定追加该参数，配置校验固定`feedback.browser_visibility=background`，不弹出桌面窗口、不调用OS置顶/抢焦点API，并将当前店铺会话作为后续页面操作上下文。
-- 尚未完成目标宿主机的下一次真实回读：需要在下一个Feedback窗口确认Bridge实际接受`--headless`、无可见窗口以及日志证据；CLI/Bridge若不支持则应安全阻断，而不是降级为可见打开。代码层完整离线回归已为 `367/367`，`compileall` 与 `git diff --check` 通过。
+- 尚未完成目标宿主机的下一次真实回读：需要在下一个Feedback窗口确认Bridge实际接受`--headless`、无可见窗口以及日志证据；CLI/Bridge若不支持则应安全阻断，而不是降级为可见打开。代码层完整离线回归已为 `369/369`，`compileall` 与 `git diff --check` 通过。
+- 对 `20260914_093632_feedback_final` 的“认证”已完成根因定位：`store_b` 页面真实返回 Seller Central 登录重定向（标题“亚马逊 登录”、URL含`/ap/signin`），代码只是安全识别后停止该店，并非代码调用了登录接口。随后只读 `ziniao-cli doctor` 和 `store list --all` 均恢复通过，支持“当时店铺会话过期/未保持登录”的判断，但不能替代当时的服务端会话审计。
+- 已增加一次有限登录恢复重试：重开后台紫鸟上下文并随机等待5～10秒；只针对登录重定向，不对验证码/风控/权限/凭证错误重试。最终失败仍标记`auth_error`，但只影响该店，另一店和价格任务继续完成。下一次真实窗口需确认重试后两店状态及本地证据字段。
 
 ## 2026-09-14 Feedback未采集与固定表头迁移（最新）
 

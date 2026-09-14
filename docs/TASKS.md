@@ -5,8 +5,10 @@
 - [x] 明确时间口径：Feedback可见列 I 的`获取时间戳`取父任务开始执行时捕获的`execution_started_at`（`Asia/Shanghai`带时区ISO时间），而不是采集完成或飞书写入完成时间；只有两店均成功且固定表写后整表回读通过时刷新全部保留行，部分/阻断批次保持上一次成功时间。
 - [x] 代码已将周报任务入口的开始时间传入`_run_feedback_stage`→`run_feedback_pipeline(now=...)`→`publish_feedback_sheet`，并在bundle/Feedback阶段报告保留`feedback_execution_started_at`，便于核对时间戳来源。
 - [x] 紫鸟官方 CLI 帮助已确认`store open --headless`可用；`app/seller_feedback_browser.py`现在固定使用该参数，拒绝可见窗口/桌面抢焦点路径，并要求`feedback.browser_visibility=background`。运行报告记录窗口策略；不调用Windows置顶或前台API。
-- [x] `config/config.json`、`config/config.example.json`、`app/config.py`和SPEC同步增加并校验`feedback.browser_visibility=background`；流程图和操作边界已更新。完整离线回归 `367/367` 通过（命令墙钟约 `4.013s`），`compileall`、`git diff --check`和实际配置加载校验均通过。
+- [x] `config/config.json`、`config/config.example.json`、`app/config.py`和SPEC同步增加并校验`feedback.browser_visibility=background`；流程图和操作边界已更新。新增登录重定向有限重试回归后，完整离线回归 `369/369` 通过（命令墙钟约 `3.298s`），`compileall`、`git diff --check`和实际配置加载校验均通过。
 - [ ] 下一次真实Feedback窗口需在目标宿主机回读日志中的`store open --headless`、Bridge会话复用和无可见弹窗证据；若Bridge不支持无头打开，必须阻断并留证，不能退回可见模式。
+- [x] 复核 `20260914_093632_feedback_final` 的认证异常：`store_a` 已完成2页读取；`store_b` 的导航最终落到 `https://sellercentral.amazon.com/ap/signin...`，页面标题为“亚马逊 登录”，不是代码主动发起额外认证，也不是飞书写入失败；`_guard_page_output`按安全规则将登录页识别为`auth_error`并关闭该店铺上下文。当前只读 `ziniao-cli doctor`、Bridge和两店`store list --all`均通过，说明更可能是该店当时Seller Central会话过期/未保持登录。
+- [x] 增加逐店有限认证恢复：默认`auth_retry_attempts=1`，登录重定向仅在关闭当前上下文后，以`store open --headless`重新打开并随机等待5～10秒再导航；验证码、机器人校验、风控、权限、Keychain/API Key错误不重试。每店记录`auth_retry_count`、`auth_retry_delays_seconds`和最终原因；一次店铺失败不会中止另一店铺或价格发布。
 
 ## 2026-09-14 Feedback未采集原因与固定表头迁移（最新）
 

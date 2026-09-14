@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import random
 import re
 import time
 from collections import Counter
@@ -655,12 +656,52 @@ def _status_for_exception(exc: Exception) -> str:
     return 'blocked'
 
 
+def _is_retryable_auth_failure(exc: Exception) -> bool:
+    """Return True only for a likely Seller Central login redirect.
+
+    A login page can be a transient store-session expiry and is safe to retry
+    after the collector's ``finally`` block closes that store context.  CAPTCHA,
+    robot/risk, permission, keychain and API-key errors are not transient page
+    redirects and must remain fail-closed without an automated retry.
+    """
+    text = str(exc).lower()
+    non_retryable = (
+        'captcha', 'robot check', 'verify you are human', '验证码', 'suspicious',
+        '风控', 'permission', 'keychain', 'apikey', 'api key', 'credential',
+        'access denied',
+    )
+    if any(marker in text for marker in non_retryable):
+        return False
+    return any(marker in text for marker in (
+        '/ap/signin', 'seller central login', '亚马逊 登录', 'login page',
+        'login required', 'sign in required', 'authentication required',
+        '重新登录',
+    ))
+
+
 def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                      evidence_dir: Path, *, window: dict | None = None,
                      fetched_at: str = '', max_rating: int = 3,
                      store_order: Iterable[str] = DEFAULT_STORE_ORDER,
-                     store_display_names: dict[str, str] | None = None) -> dict:
+                     store_display_names: dict[str, str] | None = None,
+                     auth_retry_attempts: int = 0,
+                     auth_retry_wait_min: float = 5.0,
+                     auth_retry_wait_max: float = 10.0,
+                     retry_sleep_fn: Callable = time.sleep) -> dict:
     """Run injected store collectors serially and persist redacted evidence."""
+    try:
+        retry_limit = int(auth_retry_attempts)
+    except (TypeError, ValueError) as exc:
+        raise FeedbackDataError('auth_retry_attempts 必须是整数') from exc
+    if retry_limit < 0 or retry_limit > 3:
+        raise FeedbackDataError('auth_retry_attempts 必须在0到3之间')
+    try:
+        retry_min = float(auth_retry_wait_min)
+        retry_max = float(auth_retry_wait_max)
+    except (TypeError, ValueError) as exc:
+        raise FeedbackDataError('auth_retry_wait_min/max 必须是数字') from exc
+    if retry_min < 1 or retry_max < retry_min or retry_max > 120:
+        raise FeedbackDataError('auth_retry_wait_min/max 范围或顺序无效')
     started = time.monotonic()
     started_at = local_now()
     evidence_dir = Path(evidence_dir)
@@ -677,35 +718,54 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
             'browser_headless': True,
             'browser_context_policy': 'store_context',
             'store_open_succeeded': False,
+            'auth_retry_configured': retry_limit,
+            'auth_retry_count': 0,
+            'auth_retry_delays_seconds': [],
         }
+        collector = collectors.get(store)
         try:
-            collector = collectors[store]
+            if collector is None:
+                raise FeedbackDataError(f'未找到店铺 {store} 的采集器')
             parameters = inspect.signature(collector).parameters
             accepts_window = ('window' in parameters or any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in parameters.values()))
-            response = collector(window=window) if accepts_window else collector()
-            source_url = ''
-            pages = response
-            if isinstance(response, dict):
-                pages = response.get('pages') or []
-                source_url = str(response.get('source_url') or '')
-                store_report.update({
-                    key: response.get(key)
-                    for key in (
-                        'detail_attempted', 'detail_complete', 'next_clicks',
-                        'boundary_reached', 'boundary_page', 'risk_stopped',
-                        'browser_visibility', 'browser_headless',
-                        'browser_context_policy', 'store_open_succeeded',
-                    )
-                    if key in response
-                })
-            rows, stats = normalize_feedback_pages(
-                store, pages, run_id, window=window, source_url=source_url,
-                fetched_at=fetched_at, max_rating=max_rating,
-                store_display_names=store_display_names)
-            store_report.update(stats, rows=rows, source_url=source_url)
-            all_rows.extend(rows)
+            while True:
+                try:
+                    response = collector(window=window) if accepts_window else collector()
+                    source_url = ''
+                    pages = response
+                    if isinstance(response, dict):
+                        pages = response.get('pages') or []
+                        source_url = str(response.get('source_url') or '')
+                        store_report.update({
+                            key: response.get(key)
+                            for key in (
+                                'detail_attempted', 'detail_complete', 'next_clicks',
+                                'boundary_reached', 'boundary_page', 'risk_stopped',
+                                'browser_visibility', 'browser_headless',
+                                'browser_context_policy', 'store_open_succeeded',
+                            )
+                            if key in response
+                        })
+                    rows, stats = normalize_feedback_pages(
+                        store, pages, run_id, window=window, source_url=source_url,
+                        fetched_at=fetched_at, max_rating=max_rating,
+                        store_display_names=store_display_names)
+                    store_report.update(stats, rows=rows, source_url=source_url)
+                    all_rows.extend(rows)
+                    break
+                except Exception as exc:
+                    if (_is_retryable_auth_failure(exc)
+                            and store_report['auth_retry_count'] < retry_limit):
+                        delay = round(random.uniform(retry_min, retry_max), 3)
+                        store_report['auth_retry_count'] += 1
+                        store_report['auth_retry_delays_seconds'].append(delay)
+                        store_report['auth_retry_last_reason'] = redact_secrets(
+                            f'{type(exc).__name__}: {exc}')
+                        retry_sleep_fn(delay)
+                        continue
+                    raise
         except Exception as exc:
             store_report.update(
                 status=_status_for_exception(exc),
@@ -783,6 +843,9 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
                           retention_days: int = 10, max_rating: int = 3,
                           store_order: Iterable[str] = DEFAULT_STORE_ORDER,
                           store_display_names: dict[str, str] | None = None,
+                          auth_retry_attempts: int = 1,
+                          auth_retry_wait_min: float = 5.0,
+                          auth_retry_wait_max: float = 10.0,
                           write: bool = False) -> dict:
     """Run collection, optional fixed-sheet publication and state advancement.
 
@@ -800,7 +863,10 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
         run_id, collectors, evidence_dir, window=window,
         fetched_at=execution_started_at.isoformat(timespec='seconds'),
         max_rating=max_rating, store_order=store_order,
-        store_display_names=store_display_names)
+        store_display_names=store_display_names,
+        auth_retry_attempts=auth_retry_attempts,
+        auth_retry_wait_min=auth_retry_wait_min,
+        auth_retry_wait_max=auth_retry_wait_max)
     sheet_report = {
         'status': 'not_configured',
         'readback': {'status': 'not_configured'},

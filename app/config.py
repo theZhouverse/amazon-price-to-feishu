@@ -104,6 +104,12 @@ DEFAULTS = {
         # in the official CLI's background/headless mode.  A visible window
         # or OS-level foreground/topmost operation is not supported in jobs.
         'browser_visibility': 'background',
+        # A Seller Central login redirect may be a transient store-session
+        # expiry.  Retry that page once after a bounded random wait; CAPTCHA,
+        # risk, permission and keychain failures remain fail-closed.
+        'auth_retry_attempts': 1,
+        'auth_retry_wait_min': 5.0,
+        'auth_retry_wait_max': 10.0,
         'stores': [],
     },
     # 历史/人工指定子表示例；正式周报运行按快照元数据动态发现，不受此列表限制。
@@ -360,6 +366,19 @@ def validate(cfg: dict) -> None:
     if str(feedback.get('browser_visibility') or '').strip().lower() != 'background':
         raise RuntimeError(
             'feedback.browser_visibility 必须固定为 background，禁止Feedback任务弹出紫鸟窗口')
+    try:
+        auth_retry_attempts = int(feedback.get('auth_retry_attempts'))
+    except (TypeError, ValueError):
+        raise RuntimeError('feedback.auth_retry_attempts 必须是整数')
+    if not 0 <= auth_retry_attempts <= 3:
+        raise RuntimeError('feedback.auth_retry_attempts 必须在0到3之间')
+    try:
+        auth_retry_min = float(feedback.get('auth_retry_wait_min'))
+        auth_retry_max = float(feedback.get('auth_retry_wait_max'))
+    except (TypeError, ValueError):
+        raise RuntimeError('feedback.auth_retry_wait_min/max 必须是数字')
+    if auth_retry_min < 1 or auth_retry_max < auth_retry_min or auth_retry_max > 120:
+        raise RuntimeError('feedback.auth_retry_wait_min/max 范围或顺序无效')
     try:
         max_pages = int(feedback.get('max_pages'))
     except (TypeError, ValueError):

@@ -1286,6 +1286,9 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
                 and str(item.get('display_name') or '').strip()
             },
             now=feedback_execution_started_at,
+            auth_retry_attempts=int(feedback_cfg.get('auth_retry_attempts', 1)),
+            auth_retry_wait_min=float(feedback_cfg.get('auth_retry_wait_min', 5.0)),
+            auth_retry_wait_max=float(feedback_cfg.get('auth_retry_wait_max', 10.0)),
             write=should_write,
         )
         sheet = raw.get('sheet') or {}
