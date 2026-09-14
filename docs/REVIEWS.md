@@ -1,5 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-14 Feedback未采集与固定表头迁移（最新）
+
+- 今日 07:30 批次 `20260914_073005` 并非跳过了 Feedback，而是在两个店铺采集器启动阶段同时被阻断：紫鸟本地 Bridge `http://127.0.0.1:9481` 不可连接。两个店铺的证据均为 `status=blocked`、无分页、无新行；详见 `outputs/feedback/20260914_073005/feedback_summary.json` 与 `feedback_collection.json`。
+- 本轮固定表回读为成功，但只保留/重写原有 11 行，不能解释为新数据采集；`feedback_rows_seen=0`、`feedback_rows_eligible=0`、`feedback_rows_detail_complete=0`，且 `state_advanced=false`。恢复 Bridge 后必须重新跑两店采集并核对真实新增数。
+- 已对固定子表 `Feedback差评汇总`（Sheet ID `41u25y`）执行可回滚迁移：备份原表后，将表头和每行值统一为 `店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`，写入 `A1:I12` 并整表回读通过。备份与迁移回读证据位于 `outputs/feedback/layout_migration_20260914/`。
+- 代码和离线测试现已按该顺序解析/序列化，避免只改表头导致评论、订单商品编号、ASIN、SKU错列。当前剩余阻断是紫鸟 Bridge 运行态，不是飞书表头或写回逻辑。
+
 ## 2026-09-11 BSR隐藏折叠字段误判修正（最新）
 
 - 已确认用户指出的现象：`B0DQTFFRCN.html` 中的 `Best Sellers Rank` 行确实属于当前 ASIN `B0DQTFFRCN` 的同一张商品详情表，并非推荐商品；但它位于 `.a-expander-content` 的 `style="display:none"`、`data-expanded="false"` 区域，前端当前不可见。
@@ -194,7 +201,7 @@
 
 ## 2026-09-09 Feedback固定结果子表注册与表头回读（生产发布前历史阶段）
 
-- 已在固定结果 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 中按精确标题创建唯一子表 `Feedback差评汇总`，回查得到 Sheet ID `41u25y`；写入后按 `A1:I1` 回读，9列表头完全匹配：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`。
+- 已在固定结果 Spreadsheet `Epads8MQkhkuBctjl3lcqLUvnCg` 中按精确标题创建唯一子表 `Feedback差评汇总`，回查得到 Sheet ID `41u25y`；该历史阶段的旧9列表头为`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`，已在 2026-09-14 按顶部最新节迁移为订单详情字段紧跟订单编号的顺序。
 - 本次只建立目标结构和表头，业务反馈行写入数为0；`config/config.json` 已登记 Spreadsheet/Sheet ID，但 `feedback.enabled` 仍为`false`，没有安装独立计划任务。凭证继续从本机安全凭证文件读取，没有写入仓库或日志。
 - 该表结构回读只证明目标身份和表头可用，不等同于Feedback业务验收；两店首次7日多页抓取、二级详情批量回读、两店上下分组写入/整表回读、近10日清理、后续3日状态推进和工作日07:30调度仍保持未完成边界。
 

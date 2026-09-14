@@ -1,5 +1,13 @@
 # TASKS: Amazon Daily
 
+## 2026-09-14 Feedback未采集原因与固定表头迁移（最新）
+
+- [x] 核对今日 07:30 生产批次 `run_id=20260914_073005`：价格任务按 `seq-4 / monday_carryover` 运行；Feedback 逻辑槽位已进入，但两个店铺均在采集前被紫鸟本地 Bridge 拒绝，错误为 `127.0.0.1:9481` 无法连接（提示需确认紫鸟浏览器已启动）。证据：`outputs/feedback/20260914_073005/feedback_summary.json`、`feedback_collection.json` 和 `outputs/logs/run_20260914_0730.log`。
+- [x] 明确本轮不是“新 Feedback 写入成功”：`store_a`、`store_b` 均为 `blocked`，`pages=[]`、`rows=[]`，`feedback_rows_seen=0`、`feedback_rows_eligible=0`、`feedback_rows_detail_complete=0`；固定子表仅读取并重写原有 11 行，`feedback_sheet_readback.status=ok`、`rows=11`，`state_advanced=false`。在紫鸟 Bridge 恢复并通过店铺身份检查前，不得把 11 行计为本轮新增采集。
+- [x] 按用户要求迁移固定 `Feedback差评汇总`（Sheet ID `41u25y`）的可见列顺序：`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`。先读取并备份原 11 行，再写入 `A1:I12`，飞书整表回读 9 列完全一致；没有新建子表、没有删除业务行。
+- [x] 迁移本地证据：备份 `[feedback_before_20260914_091234.json](../outputs/feedback/layout_migration_20260914/feedback_before_20260914_091234.json)`，回读记录 `outputs/feedback/layout_migration_20260914/feedback_layout_migration.json`。代码 `app/seller_feedback.py` 的表头、行值序列化和解析已同步，新增精确列位回归测试。
+- [ ] 待紫鸟浏览器/Bridge 在 `127.0.0.1:9481` 正常运行后，按原 `feedback_0730` 规则重新执行两店只读采集；必须分别确认店铺身份、页面数、合格低星数、二级详情完整数和写后 9 列读回，成功前不推进 Feedback 状态账本。
+
 ## 2026-09-11 恢复 Windows 周一至周五自动任务（当前运行态）
 
 - [x] 按用户确认启用 `AmazonDaily_0730`、`AmazonDaily_0730_weekday`、`AmazonDaily_1530`、`AmazonDaily_1530_weekday` 四个任务；任务定义未重建、未手动立即触发。
@@ -131,7 +139,7 @@
 - [x] 首次发布在表头预检处安全停止：固定结果表仍是旧版22列表头，未发生商品半批写入；随后仅迁移18个结果子表第2行表头（先生成18份本地备份、逐表回读），改为当前 `RESULT_HEADERS` 顺序：`A:G` 基础字段、`H:M` 价格/币种、`N:T` 商品主图/品牌故事/前端尺寸/BSR/父ASIN发散/环保标/AC标、`U:V` 时间戳/Amazon链接。
 - [x] 用同一 run 的已验证快照执行 `--weekly-push-only --run-id 20260910_160228 --confirm`，不重抓、不混周期；固定结果表基础字段同步 `719` 行，前端/价格结果覆盖 `719` 行，其中 `489` 行通过写入、`230` 行因 `identity_mismatch`、`parse_error` 或 `source_data_invalid` 阻断并保留恢复清单。最终发布证据以 `outputs/daily_runs/2026-09-10/20260910_160228_weekly_push.json` 和同 run `delivery.json` 为准；首次 `weekly_summary.json` 的 `written_rows=0` 是旧表头门禁阶段的中间证据，不代表恢复发布结果。
 - [x] Feedback 按两个店铺串行执行增量3日窗口（`2026-09-08`～`2026-09-10`）：原始读取 `80` 条，窗口内新增 `2` 条，合并后固定子表共 `10` 条，二级详情完整数 `2`（新增记录），两店状态均为 `ok`，阶段耗时 `159.610s`；可见“店铺”列只写配置显示名“冬豚”“北蓉”，内部 `store_a/store_b` 未泄漏。
-- [x] 固定 `Feedback差评汇总`（Sheet ID `41u25y`）严格回读 `A1:I11` 九列顺序：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`；目标子表已置于最后。经全范围空值确认，旧 `Feedback????`（`3lCGeQ`）和默认空白 `Sheet1`（`f5aa85`）均已删除。
+- [x] （历史表头，已于 2026-09-14 迁移）固定 `Feedback差评汇总`（Sheet ID `41u25y`）曾严格回读 `A1:I11` 九列旧顺序：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`；目标子表已置于最后。经全范围空值确认，旧 `Feedback????`（`3lCGeQ`）和默认空白 `Sheet1`（`f5aa85`）均已删除。当前顺序以本文件顶部最新节为准。
 - [x] 最终只读验收：18/18 商品子表新版 A:V 表头、行数、ASIN 集合、源快照有效行顺序和 H:V 覆盖均通过；Feedback 9 列、10 行、店铺显示名、末尾位置均通过；通知回执 `20260910_160228_notifications.json` 记录8名协作者成功、0失败。HTML 归档/服务保持关闭，既有 `htmls` 历史文件未删除。
 
 ## 2026-09-10 AC标识证据增强与15:30任务临时暂停（最新）
@@ -244,7 +252,7 @@
 - [ ] F2：实现窗口状态账本和日期门禁。无有效成功检查点时首次回看运行时间往前7个自然日；首次窗口两店均完成边界读取、合并和写后回读后，后续每次回看往前3个自然日；结果表按反馈日期只保留近10个自然日。窗口统一使用`Asia/Shanghai`，部分失败不得把7日窗口推进为3日窗口。
 - [ ] F3：实现后台慢速读取和风控门禁。参考`D:\projects\T2_BDLD_weekly_20260827`的串行、保守随机等待、页面稳定后读取和风险立即停机原则；按页面显示的【下一个】按钮翻页，确认页面内容/分页状态变化后再继续。遇到登录失效、验证码、风控、页面异常、分页无变化或订单身份不一致时停止当前店铺、关闭上下文、保存证据，不得连续重试轰炸，再独立尝试另一店铺。
 - [ ] F4：在【最新反馈】中解析店铺、日期、评级、订单编号、评论；筛选评级小于等于3的记录，缺失或无法解析评级不得默认合格。对每条合格记录点击订单编号进入二级页面，校验订单身份并读取订单商品编号、ASIN、SKU；二级详情失败不得猜测其他订单字段，主反馈可保留、详情字段留空并标记本地`partial`以便重试。
-- [ ] F5：固定`Feedback差评汇总`目标子表身份并改为严格9列表头：`店铺、日期、评级、订单编号、评论、订单商品编号、ASIN、SKU、获取时间戳`。两店结果写入同一子表，按固定店铺顺序上下连续分组、共用一个表头，不插入第二表头或合并单元格；目标表不追加内部幂等键、`run_id`或状态列。
+- [x] F5：固定`Feedback差评汇总`目标子表身份并使用严格9列表头：`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`。两店结果写入同一子表，按固定店铺顺序上下连续分组、共用一个表头，不插入第二表头或合并单元格；目标表不追加内部幂等键、`run_id`或状态列。2026-09-14 已完成既有 11 行的备份、迁移和整表回读。
 - [ ] F6：实现内部幂等和近10日清理。优先使用`店铺 + Seller Central稳定feedback ID`；没有稳定ID时使用`店铺 + 日期 + 评级 + 订单编号 + 评论内容哈希`，键和降级原因只写本地审计。重复读取更新同一逻辑行；写入前备份目标子表，按反馈日期删除早于10日窗口的行，写入后按9列整表回读。日期缺失或无法解释的记录不得静默写入窗口。
 - [ ] F7：保存`outputs/feedback/{run_id}/`证据和耗时。至少包含两店来源URL、店铺状态、窗口起止、页码、【下一个】按钮状态、原始读取数、评级合格数、二级详情尝试/完整数、写入数、过期删除数、失败原因、`started_at`、`finished_at`、`elapsed_seconds`和每店铺耗时；凭证、Cookie、Authorization和完整敏感响应不得落盘。无论成功、partial、blocked还是锁冲突，都必须有日志收口。
 - [ ] F8：扩展weekly bundle、delivery、summary、notification和manifest统计：`feedback_rows_seen`、`feedback_rows_eligible`、`feedback_rows_detail_complete`、`feedback_rows_written`、`feedback_rows_expired_deleted`、两店状态、两店耗时、窗口类型（`initial_7d`/`incremental_3d`）、Feedback子表回读结果和整个Feedback阶段耗时。Feedback失败不能覆盖或回滚已验证的价格结果。

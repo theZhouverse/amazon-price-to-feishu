@@ -143,6 +143,24 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(stats['feedback_rows_expired_deleted'], 1)
         self.assertEqual(len(matrix[0]), 9)
 
+    def test_feedback_visible_columns_put_order_details_after_order_id(self):
+        row = normalize_feedback_record(
+            raw_feedback('header-check', 2, '2026-09-09', order='ORDER-X',
+                         content='comment-x', item='ITEM-X', asin='ASIN-X', sku='SKU-X'),
+            'store_a', 'run1')
+        self.assertEqual(list(FEEDBACK_HEADERS), [
+            '店铺', '日期', '评级', '订单编号', '订单商品编号',
+            'ASIN', 'SKU', '评论', '获取时间戳',
+        ])
+        values = feedback_row_values(row)
+        self.assertEqual(values[3:8], ['ORDER-X', 'ITEM-X', 'ASIN-X', 'SKU-X', 'comment-x'])
+        reparsed = parse_feedback_matrix([list(FEEDBACK_HEADERS), values])[0]
+        self.assertEqual(reparsed['order_id'], 'ORDER-X')
+        self.assertEqual(reparsed['order_item_number'], 'ITEM-X')
+        self.assertEqual(reparsed['asin'], 'ASIN-X')
+        self.assertEqual(reparsed['sku'], 'SKU-X')
+        self.assertEqual(reparsed['content'], 'comment-x')
+
     def test_configured_display_names_are_visible_but_keys_stay_idempotent(self):
         names = {'store_a': '冬豚', 'store_b': '北蓉'}
         a = normalize_feedback_record(
@@ -250,7 +268,7 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(result['status'], 'ok')
         self.assertEqual(fc.values[1][0], '冬豚')
         self.assertEqual(len([row for row in fc.values[1:] if any(row)]), 1)
-        self.assertEqual(fc.values[1][4], 'updated')
+        self.assertEqual(fc.values[1][7], 'updated')
 
     def test_state_file_is_atomic_and_non_sensitive(self):
         with tempfile.TemporaryDirectory() as temp:

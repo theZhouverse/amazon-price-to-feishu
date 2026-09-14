@@ -29,8 +29,8 @@ from runtime_state import atomic_json
 
 SH_TZ = ZoneInfo('Asia/Shanghai')
 FEEDBACK_HEADERS = (
-    '店铺', '日期', '评级', '订单编号', '评论',
-    '订单商品编号', 'ASIN', 'SKU', '获取时间戳',
+    '店铺', '日期', '评级', '订单编号',
+    '订单商品编号', 'ASIN', 'SKU', '评论', '获取时间戳',
 )
 FEEDBACK_STATUSES = ('ok', 'partial', 'blocked', 'auth_error', 'skipped_lock')
 DEFAULT_STORE_ORDER = ('store_a', 'store_b')
@@ -434,8 +434,8 @@ def sort_feedback_rows(rows: Iterable[dict], store_order: Iterable[str] = DEFAUL
 def feedback_row_values(row: dict) -> list:
     """Return the exact visible A:I schema; internal evidence never leaks here."""
     return [row.get(key, '') for key in (
-        'store', 'date', 'rating', 'order_id', 'content',
-        'order_item_number', 'asin', 'sku', 'fetched_at',
+        'store', 'date', 'rating', 'order_id',
+        'order_item_number', 'asin', 'sku', 'content', 'fetched_at',
     )]
 
 
@@ -469,8 +469,8 @@ def parse_feedback_matrix(values: Iterable[list]) -> list[dict]:
         if not any(str(value or '').strip() for value in padded):
             continue
         row = dict(zip((
-            'store', 'date', 'rating', 'order_id', 'content',
-            'order_item_number', 'asin', 'sku', 'fetched_at',
+            'store', 'date', 'rating', 'order_id',
+            'order_item_number', 'asin', 'sku', 'content', 'fetched_at',
         ), padded))
         row['rating'] = normalize_rating(row.get('rating')) or row.get('rating', '')
         row['_feedback_key'], row['_degraded_key'] = feedback_key(
