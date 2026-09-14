@@ -496,6 +496,7 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
                            retention_days: int = 10,
                            store_order: Iterable[str] = DEFAULT_STORE_ORDER,
                            store_display_names: dict[str, str] | None = None,
+                           refresh_existing_timestamps: bool = False,
                            existing_range: str = 'A1:I10000') -> dict:
     """Write/read-back a caller-registered exact nine-column Feedback sheet."""
     if not spreadsheet_token or not sheet_id:
@@ -533,7 +534,37 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
         existing_rows, incoming_rows, now=now,
         retention_days=retention_days, store_order=store_order,
         store_display_names=store_display_names)
+    timestamp_refresh_at = ''
+    if refresh_existing_timestamps and data:
+        # A successful two-store collection is also a successful observation
+        # of retained rows, even when the current incremental window contains
+        # no new low-star feedback.  Refresh the visible timestamp consistently
+        # for all retained rows; blocked/partial collections leave old values
+        # untouched because the caller keeps this flag false.
+        timestamp_refresh_at = local_now(now).isoformat(timespec='seconds')
+        for row in data:
+            row[8] = timestamp_refresh_at
     matrix = [headers] + data
+    # Feishu may return the full requested range (including thousands of
+    # trailing blank rows).  Only the last non-empty row is a real target
+    # boundary; treating the requested range length as data used to clear
+    # thousands of rows and made a transient network disconnect leave the
+    # Feedback sheet blank.
+    def _normalized_row(raw):
+        padded = list(raw or [])[:len(FEEDBACK_HEADERS)]
+        padded += [''] * (len(FEEDBACK_HEADERS) - len(padded))
+        return [str(value or '') for value in padded]
+
+    previous_header = _normalized_row(values[0]) if values else list(FEEDBACK_HEADERS)
+    previous_data = []
+    previous_last_row = 1
+    for index, raw in enumerate((values or [])[1:], start=2):
+        row = _normalized_row(raw)
+        if any(value.strip() for value in row):
+            previous_data.append(row)
+            previous_last_row = index
+    previous_matrix = [previous_header] + previous_data
+
     # Keep the fixed Feedback tab last on every real publish.  Offline fakes
     # need not implement sheet metadata mutation, so the optional method is
     # intentionally feature-detected here.
@@ -542,25 +573,57 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
         move_to_end(spreadsheet_token, sheet_id)
     fc.backup_target_sheet(spreadsheet_token, 'Feedback差评汇总', sheet_id, run_id)
 
-    old_data_rows = max(0, len(values) - 1) if values else 0
-    clear_end = max(old_data_rows + 1, len(data) + 1)
-    fc.write_values(spreadsheet_token, sheet_id, 'A1:I1', [headers])
-    for start in range(2, clear_end + 1, 200):
-        end = min(start + 199, clear_end)
-        fc.write_values(
-            spreadsheet_token, sheet_id, f'A{start}:I{end}',
-            [[''] * len(FEEDBACK_HEADERS) for _ in range(end - start + 1)],
-        )
-    for offset in range(0, len(data), 200):
-        chunk = data[offset:offset + 200]
-        fc.write_values(
-            spreadsheet_token, sheet_id,
-            f'A{2 + offset}:I{1 + offset + len(chunk)}', chunk,
-        )
     last_row = max(1, len(data) + 1)
-    actual = fc.read_values(spreadsheet_token, sheet_id, f'A1:I{last_row}')
-    if not _matrix_equal(actual, matrix):
-        raise FeedbackDataError('Feedback差评汇总写后回读与固定9列表格不一致')
+    try:
+        # Write the new header/data block before touching any old trailing
+        # rows.  If a request disconnects, the recovery block below restores
+        # the exact pre-write compact matrix instead of leaving a blank tab.
+        fc.write_values(spreadsheet_token, sheet_id, 'A1:I1', [headers])
+        for offset in range(0, len(data), 200):
+            chunk = data[offset:offset + 200]
+            fc.write_values(
+                spreadsheet_token, sheet_id,
+                f'A{2 + offset}:I{1 + offset + len(chunk)}', chunk,
+            )
+        actual = fc.read_values(spreadsheet_token, sheet_id, f'A1:I{last_row}')
+        if not _matrix_equal(actual, matrix):
+            raise FeedbackDataError('Feedback差评汇总写后回读与固定9列表格不一致')
+        # Only after the new block is verified, clear stale rows that are no
+        # longer part of the compact result.  A failure here cannot erase the
+        # verified current rows; the recovery path still restores the prior
+        # image if the caller retries the run.
+        if previous_last_row > last_row:
+            for start in range(last_row + 1, previous_last_row + 1, 200):
+                end = min(start + 199, previous_last_row)
+                fc.write_values(
+                    spreadsheet_token, sheet_id, f'A{start}:I{end}',
+                    [[''] * len(FEEDBACK_HEADERS) for _ in range(end - start + 1)],
+                )
+    except Exception as exc:
+        recovery = {'status': 'attempted', 'original_error': f'{type(exc).__name__}: {exc}',
+                    'rows': len(previous_data), 'columns': len(FEEDBACK_HEADERS),
+                    'restored': False, 'restore_error': ''}
+        try:
+            fc.write_values(
+                spreadsheet_token, sheet_id,
+                f'A1:I{max(1, len(previous_matrix))}', previous_matrix,
+            )
+            if previous_last_row > len(previous_matrix):
+                for start in range(len(previous_matrix) + 1, previous_last_row + 1, 200):
+                    end = min(start + 199, previous_last_row)
+                    fc.write_values(
+                        spreadsheet_token, sheet_id, f'A{start}:I{end}',
+                        [[''] * len(FEEDBACK_HEADERS) for _ in range(end - start + 1)],
+                    )
+            restored = fc.read_values(
+                spreadsheet_token, sheet_id, f'A1:I{max(1, len(previous_matrix))}')
+            recovery['restored'] = _matrix_equal(restored, previous_matrix)
+            if not recovery['restored']:
+                recovery['restore_error'] = '恢复后回读与写前快照不一致'
+        except Exception as restore_exc:
+            recovery['restore_error'] = f'{type(restore_exc).__name__}: {restore_exc}'
+        atomic_json(evidence_dir / 'feedback_sheet_recovery.json', redact_secrets(recovery))
+        raise
     report = {
         'run_id': run_id,
         'status': 'ok',
@@ -572,6 +635,11 @@ def publish_feedback_sheet(fc, spreadsheet_token: str, sheet_id: str,
         'sheet_id': sheet_id,
         'write_range': f'A1:I{last_row}',
         'readback': {'status': 'ok', 'rows': len(data), 'columns': len(FEEDBACK_HEADERS)},
+        'timestamp_refresh': {
+            'enabled': bool(refresh_existing_timestamps),
+            'refreshed_at': timestamp_refresh_at,
+            'rows': len(data) if timestamp_refresh_at else 0,
+        },
         'elapsed_seconds': round(time.monotonic() - started, 3),
     }
     atomic_json(evidence_dir / 'feedback_sheet_write.json', redact_secrets(report))
@@ -726,10 +794,15 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
         'feedback_rows_written': 0,
     }
     if write:
+        stores = report.get('stores') or {}
+        refresh_existing_timestamps = (
+            len(stores) >= 2 and all(item.get('status') == 'ok' for item in stores.values())
+        )
         sheet_report = publish_feedback_sheet(
             fc, spreadsheet_token, sheet_id, report.get('rows') or [], run_id,
             evidence_dir, now=now, retention_days=retention_days,
-            store_order=store_order, store_display_names=store_display_names)
+            store_order=store_order, store_display_names=store_display_names,
+            refresh_existing_timestamps=refresh_existing_timestamps)
         report['feedback_rows_written'] = sheet_report.get('feedback_rows_written', 0)
     updated_state = advance_feedback_state(state, report, sheet_report)
     if write and can_advance_feedback_state(report, sheet_report):

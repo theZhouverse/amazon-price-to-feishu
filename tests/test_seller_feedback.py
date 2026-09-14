@@ -250,6 +250,50 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertTrue(all(value == '' for value in fc.values[2][:9]))
         self.assertEqual(len(fc.backups), 1)
 
+    def test_publish_can_refresh_retained_row_timestamps_after_successful_collection(self):
+        old = normalize_feedback_record(
+            raw_feedback('old', 1, '2026-09-08'), 'store_a', 'old',
+            fetched_at='2026-09-01T07:30:00+08:00')
+        fc = FakeFeishu([list(FEEDBACK_HEADERS), feedback_row_values(old)])
+        with tempfile.TemporaryDirectory() as temp:
+            result = publish_feedback_sheet(
+                fc, 'spreadsheet', 'sheet', [], 'run-refresh', Path(temp), now=NOW,
+                store_order=('store_a', 'store_b'), refresh_existing_timestamps=True)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(fc.values[1][8], '2026-09-09T07:30:00+08:00')
+        self.assertEqual(result['timestamp_refresh']['enabled'], True)
+        self.assertEqual(result['timestamp_refresh']['rows'], 1)
+
+    def test_publish_restores_prewrite_rows_when_data_write_disconnects(self):
+        old = normalize_feedback_record(
+            raw_feedback('old', 1, '2026-09-08'), 'store_a', 'old')
+
+        class FailOnceFeishu(FakeFeishu):
+            def __init__(self, values):
+                super().__init__(values)
+                self.fail_once = True
+
+            def write_values(self, spreadsheet, sheet_id, rng, values):
+                if self.fail_once and rng.startswith('A2:'):
+                    self.fail_once = False
+                    raise RuntimeError('simulated remote disconnect')
+                return super().write_values(spreadsheet, sheet_id, rng, values)
+
+        fc = FailOnceFeishu([list(FEEDBACK_HEADERS), feedback_row_values(old)])
+        incoming = [normalize_feedback_record(
+            raw_feedback('new', 2, '2026-09-09'), 'store_a', 'run1')]
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(RuntimeError, 'simulated remote disconnect'):
+                publish_feedback_sheet(
+                    fc, 'spreadsheet', 'sheet', incoming, 'run1', Path(temp), now=NOW,
+                    store_order=('store_a', 'store_b'))
+            self.assertEqual(fc.values[0], list(FEEDBACK_HEADERS))
+            self.assertEqual([str(value or '') for value in fc.values[1]],
+                             [str(value or '') for value in feedback_row_values(old)])
+            recovery = Path(temp) / 'feedback_sheet_recovery.json'
+            self.assertTrue(recovery.is_file())
+            self.assertIn('"restored": true', recovery.read_text(encoding='utf-8'))
+
     def test_publish_migrates_legacy_visible_store_keys_without_duplicate(self):
         names = {'store_a': '冬豚', 'store_b': '北蓉'}
         old = normalize_feedback_record(
