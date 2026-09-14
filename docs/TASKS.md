@@ -6,6 +6,7 @@
 - [x] 明确本轮不是“新 Feedback 写入成功”：`store_a`、`store_b` 均为 `blocked`，`pages=[]`、`rows=[]`，`feedback_rows_seen=0`、`feedback_rows_eligible=0`、`feedback_rows_detail_complete=0`；固定子表仅读取并重写原有 11 行，`feedback_sheet_readback.status=ok`、`rows=11`，`state_advanced=false`。在紫鸟 Bridge 恢复并通过店铺身份检查前，不得把 11 行计为本轮新增采集。
 - [x] 按用户要求迁移固定 `Feedback差评汇总`（Sheet ID `41u25y`）的可见列顺序：`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`。先读取并备份原 11 行，再写入 `A1:I12`，飞书整表回读 9 列完全一致；没有新建子表、没有删除业务行。
 - [x] 迁移本地证据：备份 `[feedback_before_20260914_091234.json](../outputs/feedback/layout_migration_20260914/feedback_before_20260914_091234.json)`，回读记录 `outputs/feedback/layout_migration_20260914/feedback_layout_migration.json`。代码 `app/seller_feedback.py` 的表头、行值序列化和解析已同步，新增精确列位回归测试。
+- [x] 事后只读探针显示当前 `ziniao-cli store list` 已可通过并返回两个已登记店铺；这只能证明 Bridge 目前恢复可达，不能把本次 07:30 的零采集改判为成功，也未自动重跑或补写历史窗口。
 - [ ] 待紫鸟浏览器/Bridge 在 `127.0.0.1:9481` 正常运行后，按原 `feedback_0730` 规则重新执行两店只读采集；必须分别确认店铺身份、页面数、合格低星数、二级详情完整数和写后 9 列读回，成功前不推进 Feedback 状态账本。
 
 ## 2026-09-11 恢复 Windows 周一至周五自动任务（当前运行态）

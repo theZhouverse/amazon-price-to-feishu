@@ -5,6 +5,7 @@
 - 今日 07:30 批次 `20260914_073005` 并非跳过了 Feedback，而是在两个店铺采集器启动阶段同时被阻断：紫鸟本地 Bridge `http://127.0.0.1:9481` 不可连接。两个店铺的证据均为 `status=blocked`、无分页、无新行；详见 `outputs/feedback/20260914_073005/feedback_summary.json` 与 `feedback_collection.json`。
 - 本轮固定表回读为成功，但只保留/重写原有 11 行，不能解释为新数据采集；`feedback_rows_seen=0`、`feedback_rows_eligible=0`、`feedback_rows_detail_complete=0`，且 `state_advanced=false`。恢复 Bridge 后必须重新跑两店采集并核对真实新增数。
 - 已对固定子表 `Feedback差评汇总`（Sheet ID `41u25y`）执行可回滚迁移：备份原表后，将表头和每行值统一为 `店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`，写入 `A1:I12` 并整表回读通过。备份与迁移回读证据位于 `outputs/feedback/layout_migration_20260914/`。
+- 迁移后执行的 `ziniao-cli store list` 只读探针已经返回两个登记店铺，说明 Bridge 当前可达；这不是对 07:30 失败批次的补跑，下一次采集仍需在真实计划窗口核对两店分页和详情证据。
 - 代码和离线测试现已按该顺序解析/序列化，避免只改表头导致评论、订单商品编号、ASIN、SKU错列。当前剩余阻断是紫鸟 Bridge 运行态，不是飞书表头或写回逻辑。
 
 ## 2026-09-11 BSR隐藏折叠字段误判修正（最新）
