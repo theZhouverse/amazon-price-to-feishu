@@ -8,6 +8,16 @@
 - [x] 新增稳定结构兼容/容量变化回归；离线回归 `371/371` 通过（命令墙钟约 5.260 秒），`compileall`、`git diff --check` 均通过。
 - [ ] 待执行：在不并发启动第二个任务的前提下，复用 seq-5 已创建的 pending 快照完成初始化、动态发现和 A:G 只读核对；确认 18 个子表映射后再决定是否进行正式价格抓取/固定表发布。当前未执行云端业务写入，原 18:30 结果表保持不变。
 
+## 2026-09-14 seq-5结构适配后正式全量运行
+
+- [x] 复用 `20260914_153004` 已创建的快照并以正式 `scheduled_slot=monday_1530`、`selection_mode=monday_switch` 继续运行；没有重复创建周报副本。初始化、动态发现和结果表资源均为 `ready`，固定结果 Spreadsheet Token/URL 保持不变。
+- [x] 全量完成 18 个业务子表、721 行基础数据（US 11 表/551 行，CA 7 表/170 行）。结果状态：`ok=493`、`identity_mismatch=194`、`source_data_invalid=30`、`parse_error=4`；技术异常仅计 `parse_error/crawl_error`，本轮无 `crawl_error`，身份不一致仍按源链接门禁阻断。
+- [x] 固定结果表写回并逐行回读：A:G 基础数据覆盖 721 行，H:V 价格/前端结果成功写入 493 行，228 行阻断留在恢复清单；delivery `verified=true` 为 493/493，写入失败 0。结果表同步名称为 `Amazon周报前端价格捕捉_2026-W38_20260914_153004`，固定链接未变。
+- [x] 前端检查统计已随同批结果保存：`pass=343`、`fail=150`、`unknown/not_applicable` 按逐行证据记录；币种 `USD=551`、`CAD=170`。HTML归档关闭，未新增HTML文件；周一15:30按规则跳过Feedback（`feedback_status=skipped_schedule`）。
+- [x] 全流程耗时 `4912.016` 秒（约 81 分 52.016 秒，15:45:46～17:07:43），一次性通知 8 名应用协作者，成功 8、失败 0。
+- [x] 证据：`outputs/daily_runs/2026-09-14/20260914_153004_weekly_bundle.json`、`20260914_153004_weekly_summary.json`、`20260914_153004_delivery.json`、`20260914_153004_notifications.json`、`outputs/logs/run_20260914_1545.log`。seq-5 manifest 已更新为 `status=ready`、`mapping_ready=true`、`business_ready=true`。
+- [ ] 后续风险：CA 仍有 134 条身份不一致（另有 9 条 source-invalid、1 条 parse-error），需按恢复清单继续做链接映射/人工确认；这不影响本轮安全写回，但不能把 `partial` 宣称为全量无异常。
+
 ## 2026-09-14 Feedback执行时间戳与紫鸟后台窗口策略（最新）
 
 - [x] 明确时间口径：Feedback可见列 I 的`获取时间戳`取父任务开始执行时捕获的`execution_started_at`（`Asia/Shanghai`带时区ISO时间），而不是采集完成或飞书写入完成时间；只有两店均成功且固定表写后整表回读通过时刷新全部保留行，部分/阻断批次保持上一次成功时间。
