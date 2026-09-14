@@ -1,5 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-14 Feedback执行时间戳与紫鸟后台窗口策略（最新）
+
+- 规格已明确：Feedback列 I 的`获取时间戳`使用父任务开始时的`execution_started_at`（Asia/Shanghai带时区ISO），不是写入完成时间；完整两店采集并通过固定表回读才刷新全部保留行，partial/blocked/auth_error保留旧时间。
+- `_run_feedback_stage`已把周报任务起始时间显式传入Feedback pipeline；报告和bundle同时记录`feedback_execution_started_at`，因此可把云端时间戳与本地任务开始时间直接比对。
+- CLI只读帮助确认`store open`支持`--headless`；生产适配器已固定追加该参数，配置校验固定`feedback.browser_visibility=background`，不弹出桌面窗口、不调用OS置顶/抢焦点API，并将当前店铺会话作为后续页面操作上下文。
+- 尚未完成目标宿主机的下一次真实回读：需要在下一个Feedback窗口确认Bridge实际接受`--headless`、无可见窗口以及日志证据；CLI/Bridge若不支持则应安全阻断，而不是降级为可见打开。代码层完整离线回归已为 `367/367`，`compileall` 与 `git diff --check` 通过。
+
 ## 2026-09-14 Feedback未采集与固定表头迁移（最新）
 
 - 今日 07:30 批次 `20260914_073005` 并非跳过了 Feedback，而是在两个店铺采集器启动阶段同时被阻断：紫鸟本地 Bridge `http://127.0.0.1:9481` 不可连接。两个店铺的证据均为 `status=blocked`、无分页、无新行；详见 `outputs/feedback/20260914_073005/feedback_summary.json` 与 `feedback_collection.json`。

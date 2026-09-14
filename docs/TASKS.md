@@ -1,5 +1,13 @@
 # TASKS: Amazon Daily
 
+## 2026-09-14 Feedback执行时间戳与紫鸟后台窗口策略（最新）
+
+- [x] 明确时间口径：Feedback可见列 I 的`获取时间戳`取父任务开始执行时捕获的`execution_started_at`（`Asia/Shanghai`带时区ISO时间），而不是采集完成或飞书写入完成时间；只有两店均成功且固定表写后整表回读通过时刷新全部保留行，部分/阻断批次保持上一次成功时间。
+- [x] 代码已将周报任务入口的开始时间传入`_run_feedback_stage`→`run_feedback_pipeline(now=...)`→`publish_feedback_sheet`，并在bundle/Feedback阶段报告保留`feedback_execution_started_at`，便于核对时间戳来源。
+- [x] 紫鸟官方 CLI 帮助已确认`store open --headless`可用；`app/seller_feedback_browser.py`现在固定使用该参数，拒绝可见窗口/桌面抢焦点路径，并要求`feedback.browser_visibility=background`。运行报告记录窗口策略；不调用Windows置顶或前台API。
+- [x] `config/config.json`、`config/config.example.json`、`app/config.py`和SPEC同步增加并校验`feedback.browser_visibility=background`；流程图和操作边界已更新。完整离线回归 `367/367` 通过（命令墙钟约 `4.013s`），`compileall`、`git diff --check`和实际配置加载校验均通过。
+- [ ] 下一次真实Feedback窗口需在目标宿主机回读日志中的`store open --headless`、Bridge会话复用和无可见弹窗证据；若Bridge不支持无头打开，必须阻断并留证，不能退回可见模式。
+
 ## 2026-09-14 Feedback未采集原因与固定表头迁移（最新）
 
 - [x] 核对今日 07:30 生产批次 `run_id=20260914_073005`：价格任务按 `seq-4 / monday_carryover` 运行；Feedback 逻辑槽位已进入，但两个店铺均在采集前被紫鸟本地 Bridge 拒绝，错误为 `127.0.0.1:9481` 无法连接（提示需确认紫鸟浏览器已启动）。证据：`outputs/feedback/20260914_073005/feedback_summary.json`、`feedback_collection.json` 和 `outputs/logs/run_20260914_0730.log`。

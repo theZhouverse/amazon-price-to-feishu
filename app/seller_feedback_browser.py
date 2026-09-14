@@ -157,7 +157,13 @@ def _cli_value(value: object) -> object:
 
 
 class ZiniaoCliRunner:
-    """Small official-CLI wrapper with output and risk-marker guards."""
+    """Small official-CLI wrapper with output and risk-marker guards.
+
+    Feedback runs are non-interactive production jobs.  The official CLI
+    supports ``store open --headless``; use it by default so opening a store
+    enters the bridge store context without creating a visible desktop window
+    or stealing the user's foreground focus.
+    """
 
     def __init__(self, cli_path: Path | None = None, *, cwd: Path | None = None,
                  run_fn: Callable = subprocess.run):
@@ -189,7 +195,10 @@ class ZiniaoCliRunner:
         return _cli_value(value)
 
     def store_open(self, store_id: str) -> object:
-        return self.call(['store', 'open', '--id', store_id], timeout=180)
+        # Do not expose a visible-window escape hatch through this production
+        # adapter.  Debugging can use an explicitly separate CLI invocation;
+        # scheduled Feedback must remain background-only.
+        return self.call(['store', 'open', '--id', store_id, '--headless'], timeout=180)
 
     def store_close(self, store_id: str) -> object:
         return self.call(['store', 'close', '--id', store_id], timeout=60)
@@ -510,6 +519,7 @@ class FeedbackStoreCollector:
         self.detail_wait_max = detail_wait_max
         self.max_pages = max_pages
         self.max_detail_attempts = int(max_detail_attempts)
+        self.store_open_succeeded = False
         if self.max_detail_attempts < 0:
             raise FeedbackDataError(
                 f'店铺 {self.key}: max_detail_attempts 不能为负数'
@@ -668,7 +678,9 @@ class FeedbackStoreCollector:
         detail_attempted = detail_complete = next_clicks = 0
         boundary_reached = False
         boundary_page = None
+        self.store_open_succeeded = False
         self.runner.store_open(store_id)
+        self.store_open_succeeded = True
         try:
             _sleep_random(5.0, 7.0, self.sleep_fn)
             self.runner.page_visit(store_id, url)
@@ -815,6 +827,13 @@ class FeedbackStoreCollector:
             'next_clicks': next_clicks,
             'boundary_reached': boundary_reached,
             'boundary_page': boundary_page,
+            # The production runner always uses the official CLI's
+            # ``store open --headless``.  Keep the policy in per-store
+            # evidence without persisting session-bearing CLI output.
+            'browser_visibility': 'background',
+            'browser_headless': True,
+            'browser_context_policy': 'store_context',
+            'store_open_succeeded': self.store_open_succeeded,
             'elapsed_seconds': round(time.monotonic() - started, 3),
         }
 
@@ -831,6 +850,10 @@ def build_feedback_collectors(feedback_cfg: dict, *, runner: FeedbackRunner | No
     stores = feedback_cfg.get('stores') or []
     if len(stores) != 2:
         raise FeedbackDataError('Feedback必须登记两个店铺后才能建立采集器')
+    visibility = str(feedback_cfg.get('browser_visibility') or 'background').strip().lower()
+    if visibility != 'background':
+        raise FeedbackDataError(
+            'Feedback紫鸟浏览器必须使用 background 策略，禁止打开可见窗口或抢占前台')
     runner = runner or ZiniaoCliRunner()
     result = {}
     for store in stores:

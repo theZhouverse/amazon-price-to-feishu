@@ -115,6 +115,9 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertFalse(result['pages'][0]['boundary_reached'])
         self.assertEqual(runner.calls[0], ('open', 'store-id-a'))
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+        self.assertTrue(result['store_open_succeeded'])
+        self.assertEqual(result['browser_visibility'], 'background')
+        self.assertTrue(result['browser_headless'])
 
     def test_missing_selector_fails_closed(self):
         broken = self.store()
@@ -130,6 +133,11 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         with self.assertRaises(FeedbackDataError):
             collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
         self.assertEqual(runner.calls, [])
+
+    def test_feedback_collectors_reject_visible_window_policy(self):
+        from seller_feedback_browser import build_feedback_collectors
+        with self.assertRaisesRegex(FeedbackDataError, 'background'):
+            build_feedback_collectors({'stores': [{}, {}], 'browser_visibility': 'visible'})
 
     def test_feedback_manager_url_requires_feedback_path(self):
         with self.assertRaises(FeedbackDataError):
@@ -315,6 +323,23 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertEqual(result, {'ok': True})
         self.assertNotIn('\n', captured['args'][-1])
         self.assertIn('const x = 1; return x;', captured['args'][-1])
+
+    def test_store_open_is_always_headless(self):
+        captured = {}
+
+        def run_fn(args, **kwargs):
+            captured['args'] = args
+            return type('Completed', (), {
+                'returncode': 0,
+                'stdout': '{"result":{"ok":true}}',
+                'stderr': '',
+            })()
+
+        runner = ZiniaoCliRunner(cli_path=Path(__file__), run_fn=run_fn)
+        self.assertEqual(runner.store_open('store-a'), {'ok': True})
+        self.assertEqual(captured['args'][-1], '--headless')
+        self.assertIn('store', captured['args'])
+        self.assertIn('open', captured['args'])
 
     def test_guard_ignores_cli_notice_but_blocks_risk_in_page_result(self):
         _guard_page_output({

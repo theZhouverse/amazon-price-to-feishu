@@ -1,6 +1,6 @@
 # SPEC：Amazon 周报前端价格捕捉任务
 
-> 当前规格，更新于2026-09-11。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
+> 当前规格，更新于2026-09-14。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
 >
 > 旧版已完整保存到[历史目录](history/README.md)，其中“每周新建结果表”“HTML门禁”“仅下午执行”“8月31日截止”不再是当前规则。
 
@@ -68,7 +68,7 @@ flowchart TD
     P --> Q
     M --> FB0{当前为Feedback工作日07:30槽位?}
     FB0 -- 否 --> R
-    FB0 -- 是 --> FB[串行进入店铺A的Seller Central反馈管理器]
+    FB0 -- 是 --> FB[以store open --headless进入店铺A当前紫鸟会话；不弹窗、不抢占前台]
     FB --> FB1[在最新反馈区域按日期窗口读取；仅保留评级<=3]
     FB1 --> FB2[点击每条合格反馈的订单编号进入二级详情，读取订单商品编号、ASIN、SKU]
     FB2 --> FB3[确认当前页下一个按钮及页面身份后继续店铺A分页]
@@ -228,7 +228,7 @@ ReportRow记录源行、ASIN、基础字段、目标价来源和前端检查预�
 | F | ASIN | 同一订单二级界面读取 |
 | G | SKU | 同一订单二级界面读取 |
 | H | 评论 | 【最新反馈】中的评论原文，不改写摘要、不拼接本地内容 |
-| I | 获取时间戳 | 最近一次两店均成功完成采集、且固定表写后整表回读通过的刷新时间，使用带时区的ISO时间；两店部分/阻断时不刷新已保留行 |
+| I | 获取时间戳 | 本次任务开始执行时记录的`execution_started_at`（Asia/Shanghai带时区ISO时间）；两店均成功且固定表写后整表回读通过时，将该时间写入全部保留行；部分/阻断时不刷新已保留行，不能使用写入完成时间 |
 
 两个店铺共用同一个子表，按固定店铺顺序上下连续分组；每组按反馈日期倒序、再按稳定的内部幂等键排序。只保留一个表头，不插入第二个表头或合并单元格；店铺列是机器读取和人工分组的唯一边界。内部幂等键不新增为可见列，优先使用`店铺 + Seller Central稳定feedback ID`；若页面没有稳定ID，使用`店铺 + 日期 + 评级 + 订单编号 + 评论内容哈希`并将降级原因写入本地审计。重复读取更新同一逻辑记录，不重复追加。
 
@@ -290,6 +290,8 @@ Feedback来源是两个指定店铺的Amazon Seller Central【反馈管理器】
 
 后台采集的会话、凭证、验证码和权限检查独立于零售页面的US/CA邮编与价格浏览器。每个页面导航、翻页和订单详情访问之间使用配置化的保守随机等待，并在页面稳定、身份和目标控件确认后继续；具体等待值必须进入运行日志，不能用固定高频循环。遇到登录页、验证码、风控提示、页面异常、分页状态不变化或订单身份不一致时立即停止当前店铺，不连续重试；另一店铺仍使用全新上下文独立执行。后台任务遵守统一运行锁和日志收口，但单店铺失败只阻断Feedback子表对应范围；价格结果可以继续发布。
 
+紫鸟窗口策略固定为`feedback.browser_visibility=background`。每次打开店铺必须通过官方CLI的`store open --headless`进入该店铺的当前操作上下文，后续`page visit`、翻页和详情读取只作用于该上下文；不得创建可见桌面窗口、弹出新窗口、调用Windows前台/置顶/抢焦点API，不能干扰用户当前界面。“置顶当前界面”在本项目中定义为保持该店铺上下文作为后续页面操作目标，不是把操作窗口强制置于操作系统最前端。若CLI或Bridge不支持无头打开，必须记录`browser_visibility=blocked`及原因并停止该店铺，禁止退回可见模式。运行证据和日志记录窗口策略、`store_id`、CLI返回状态及是否实际打开，不保存Cookie或凭证。
+
 Feedback状态只有在两店分页、筛选、必要的二级详情访问、近10日合并、写入和9列整表回读均有证据时才更新本批成功检查点。首次7日窗口未完成时不得进入后续3日窗口。每次日志必须保存整个Feedback子任务的`started_at`、`finished_at`、`elapsed_seconds`，以及每店铺的开始/结束时间、耗时、页面数、二级详情数、原始读取数、评级合格数、完整详情数、partial/blocked数、写入数和删除的过期行数。
 
 ## 7. 交付与安全边界
@@ -332,7 +334,7 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 
 导航、文档/价格等待、页面脚本读取和稳定等待按剩余deadline裁剪；禁用导航内部重试，重试只由外层统一执行，每次直接重新导航，不插入额外无预算refresh/rebuild。DrissionPage的`tab.get()`或`doc_loaded()`可能在URL已经切换到目标页时因等待超时返回`False`：此时只有在当前Tab URL同时满足目标Marketplace域名和请求ASIN时才允许继续，后续仍必须执行页面元数据、最终URL/ASIN、页面结构和DOM身份门禁；URL为空、站点不符、ASIN不符或Chrome `chrome-error://`错误页必须立即标记`navigation_failed`/`navigation_timeout`并停止读取，不能解析旧DOM。商品页动态主体等待只能使用当前商品区域（标题、主图、Buy Box、主价或可用性），不得使用全页面任意`.a-price`，防止推荐卡提前满足等待条件；地址弹窗输入框和提交按钮按有限轮询等待异步渲染，不能用单次固定短sleep判定`postal_input_not_found`。返回成功前复查截止时间，超时清除价格并标记deadline_exceeded。初始化首页timeout为30秒（不是30000秒）。商品间1～3秒等待不计入90秒抓取预算；浏览器驱动/操作系统失去响应仍不是进程级强制终止保障，不能宣称任何环境下墙钟严格90秒。
 
-浏览器启动兼容与诊断：`browser_auto_port=true`时为每次浏览器会话在受控本地端口范围内分配独立CDP端口，禁止复用残留的固定9222会话；当前Chrome 136+/152与DrissionPage 4.1.1.4组合必须带`--remote-allow-origins=*`，本机已验证需要`--disable-gpu`和`--no-sandbox`才能稳定建立CDP连接，三项均可由配置关闭后在迁移设备重新验收。不得固定过期User-Agent，使用本机Chromium原生版本。浏览器启动日志必须记录`stage`、Marketplace、headless、auto_port、no_sandbox、disable_gpu、是否显式代理、脱敏启动参数、CDP address、browser version和耗时；setup日志记录目标首页导航返回值、观察到的URL/host、位置模式/验证方法和失败原因；商品导航日志记录`tab.get`/`doc_loaded`返回False时的观察URL、ASIN绑定结果和Chrome错误页。日志不得保存Secret、Cookie、Authorization或完整代理凭证。
+浏览器启动兼容与诊断：`browser_auto_port=true`时为每次浏览器会话在受控本地端口范围内分配独立CDP端口，禁止复用残留的固定9222会话；当前Chrome 136+/152与DrissionPage 4.1.1.4组合必须带`--remote-allow-origins=*`，本机已验证需要`--disable-gpu`和`--no-sandbox`才能稳定建立CDP连接，三项均可由配置关闭后在迁移设备重新验收。不得固定过期User-Agent，使用本机Chromium原生版本。浏览器启动日志必须记录`stage`、Marketplace、headless、auto_port、no_sandbox、disable_gpu、是否显式代理、脱敏启动参数、CDP address、browser version和耗时；setup日志记录目标首页导航返回值、观察到的URL/host、位置模式/验证方法和失败原因；商品导航日志记录`tab.get`/`doc_loaded`返回False时的观察URL、ASIN绑定结果和Chrome错误页。Feedback紫鸟启动日志还必须记录`browser_visibility=background`、`store_open --headless`和当前店铺会话是否复用；日志不得保存Secret、Cookie、Authorization或完整代理凭证。
 
 ## 10. 多站点、ASIN和币种
 

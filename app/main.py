@@ -1226,14 +1226,23 @@ def _feedback_report_base(status: str, *, reason: str = '') -> dict:
         'feedback_window_type': '',
         'feedback_sheet_readback': {'status': 'not_configured'},
         'feedback_elapsed_seconds': 0.0,
+        'feedback_execution_started_at': '',
+        'feedback_browser_visibility': 'background',
     }
     if reason:
         report['feedback_error'] = str(reason)[:1000]
     return report
 
 
-def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> dict:
-    """Run independent Feedback collection only in the weekday 07:30 slot."""
+def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
+                        *, execution_started_at: datetime | None = None) -> dict:
+    """Run independent Feedback collection only in the weekday 07:30 slot.
+
+    ``execution_started_at`` is the wall-clock timestamp captured when the
+    parent task began.  It is deliberately passed through to the Feedback
+    pipeline so the visible ``获取时间戳`` means *task execution time*, rather
+    than the later Feishu write-completion time.
+    """
     feedback_cfg = cfg.get('feedback') or {}
     slot = getattr(args, 'scheduled_slot', 'manual') or 'manual'
     if slot not in ('monday_0730', 'weekday_0730'):
@@ -1250,9 +1259,11 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
     if not state_path.is_absolute():
         state_path = PROJECT_ROOT / state_path
     evidence_root.mkdir(parents=True, exist_ok=True)
+    feedback_execution_started_at = execution_started_at
     try:
-        from seller_feedback import run_feedback_pipeline
+        from seller_feedback import local_now, run_feedback_pipeline
         from seller_feedback_browser import build_feedback_collectors
+        feedback_execution_started_at = local_now(execution_started_at)
         collectors = build_feedback_collectors(feedback_cfg)
         should_write = not args.dry_run and not args.fetch_only
         raw = run_feedback_pipeline(
@@ -1274,6 +1285,7 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
                 if isinstance(item, dict) and str(item.get('key') or '').strip()
                 and str(item.get('display_name') or '').strip()
             },
+            now=feedback_execution_started_at,
             write=should_write,
         )
         sheet = raw.get('sheet') or {}
@@ -1298,6 +1310,9 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
             'feedback_state_advanced': bool(raw.get('state_advanced')),
             'feedback_elapsed_seconds': raw.get('elapsed_seconds', 0.0),
             'feedback_evidence_root': str(evidence_root),
+            'feedback_execution_started_at': feedback_execution_started_at.isoformat(timespec='seconds'),
+            'feedback_browser_visibility': str(
+                feedback_cfg.get('browser_visibility') or 'background').strip().lower(),
         })
         p(logger, '[Feedback] status=' + str(result['feedback_status'])
           + ' stores=' + json.dumps(result['feedback_store_status'], ensure_ascii=False)
@@ -1318,6 +1333,11 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path) -> 
         result.update({
             'feedback_elapsed_seconds': elapsed,
             'feedback_evidence_root': str(evidence_root),
+            'feedback_execution_started_at': (
+                feedback_execution_started_at.isoformat(timespec='seconds')
+                if isinstance(feedback_execution_started_at, datetime) else ''),
+            'feedback_browser_visibility': str(
+                feedback_cfg.get('browser_visibility') or 'background').strip().lower(),
         })
         p(logger, '[Feedback] 已停止：' + json.dumps({
             'status': result['feedback_status'],
@@ -1505,7 +1525,8 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not args.asins and not args.limit:
         for item in selected:
             results_by_sheet.setdefault(item['result_sheet'], [])
-    feedback_report = _run_feedback_stage(fc, cfg, run_id, args, logger, out)
+    feedback_report = _run_feedback_stage(
+        fc, cfg, run_id, args, logger, out, execution_started_at=started_at)
     manifest['feedback_report'] = feedback_report
     manifest.update(feedback_report)
     if not args.dry_run and not args.fetch_only:

@@ -673,6 +673,10 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
         store_report = {
             'store': store, 'status': 'ok', 'source_url': '', 'pages': [],
             'rows': [], 'error': '', 'started_at': local_now().isoformat(timespec='seconds'),
+            'browser_visibility': 'background',
+            'browser_headless': True,
+            'browser_context_policy': 'store_context',
+            'store_open_succeeded': False,
         }
         try:
             collector = collectors[store]
@@ -691,6 +695,8 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                     for key in (
                         'detail_attempted', 'detail_complete', 'next_clicks',
                         'boundary_reached', 'boundary_page', 'risk_stopped',
+                        'browser_visibility', 'browser_headless',
+                        'browser_context_policy', 'store_open_succeeded',
                     )
                     if key in response
                 })
@@ -704,6 +710,12 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
             store_report.update(
                 status=_status_for_exception(exc),
                 error=redact_secrets(f'{type(exc).__name__}: {exc}'))
+            # Preserve whether the headless store context was opened before a
+            # later navigation/page safety failure.  This is useful for
+            # proving the no-popup policy without persisting CLI/session data.
+            if hasattr(collector, 'store_open_succeeded'):
+                store_report['store_open_succeeded'] = bool(
+                    getattr(collector, 'store_open_succeeded'))
             if isinstance(exc, FeedbackSafetyStop):
                 # The store collector's finally block closes the current
                 # context; the next store is a fresh, independent context as
@@ -781,11 +793,12 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
     evidence_dir = Path(evidence_dir)
     state_path = Path(state_path)
     state = load_feedback_state(state_path)
+    execution_started_at = local_now(now)
     window = feedback_window(
         now, state, initial_days=initial_days, incremental_days=incremental_days)
     report = collect_feedback(
         run_id, collectors, evidence_dir, window=window,
-        fetched_at=local_now(now).isoformat(timespec='seconds'),
+        fetched_at=execution_started_at.isoformat(timespec='seconds'),
         max_rating=max_rating, store_order=store_order,
         store_display_names=store_display_names)
     sheet_report = {
@@ -804,6 +817,11 @@ def run_feedback_pipeline(*, fc, run_id: str, collectors: dict[str, Callable[[],
             store_order=store_order, store_display_names=store_display_names,
             refresh_existing_timestamps=refresh_existing_timestamps)
         report['feedback_rows_written'] = sheet_report.get('feedback_rows_written', 0)
+    # ``collect_feedback.started_at`` describes when the collector stage
+    # actually began.  This separate field is the caller-supplied task start
+    # used for the visible timestamp column and is intentionally not replaced
+    # by the later publication time.
+    report['execution_started_at'] = execution_started_at.isoformat(timespec='seconds')
     updated_state = advance_feedback_state(state, report, sheet_report)
     if write and can_advance_feedback_state(report, sheet_report):
         save_feedback_state(state_path, updated_state)

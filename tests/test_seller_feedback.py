@@ -22,6 +22,7 @@ from seller_feedback import (  # noqa: E402
     normalize_feedback_record,
     parse_feedback_matrix,
     publish_feedback_sheet,
+    run_feedback_pipeline,
     save_feedback_state,
 )
 
@@ -263,6 +264,25 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(fc.values[1][8], '2026-09-09T07:30:00+08:00')
         self.assertEqual(result['timestamp_refresh']['enabled'], True)
         self.assertEqual(result['timestamp_refresh']['rows'], 1)
+
+    def test_pipeline_uses_execution_start_for_feedback_timestamp(self):
+        old = normalize_feedback_record(
+            raw_feedback('old', 1, '2026-09-08'), 'store_a', 'old',
+            fetched_at='2026-09-01T07:30:00+08:00')
+        fc = FakeFeishu([list(FEEDBACK_HEADERS), feedback_row_values(old)])
+        with tempfile.TemporaryDirectory() as temp:
+            report = run_feedback_pipeline(
+                fc=fc, run_id='run-execution-start',
+                collectors={'store_a': lambda **_: {'pages': []},
+                             'store_b': lambda **_: {'pages': []}},
+                evidence_dir=Path(temp), state_path=Path(temp) / 'state.json',
+                spreadsheet_token='spreadsheet', sheet_id='sheet', now=NOW,
+                store_order=('store_a', 'store_b'), write=True,
+            )
+        self.assertEqual(report['status'], 'ok')
+        self.assertEqual(fc.values[1][8], '2026-09-09T07:30:00+08:00')
+        self.assertEqual(report['sheet']['timestamp_refresh']['refreshed_at'],
+                         '2026-09-09T07:30:00+08:00')
 
     def test_publish_restores_prewrite_rows_when_data_write_disconnects(self):
         old = normalize_feedback_record(

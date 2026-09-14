@@ -100,6 +100,10 @@ DEFAULTS = {
         'detail_wait_min': 8.0,
         'detail_wait_max': 12.0,
         'max_pages': 50,
+        # Seller Central Feedback always opens the Purple Bird store context
+        # in the official CLI's background/headless mode.  A visible window
+        # or OS-level foreground/topmost operation is not supported in jobs.
+        'browser_visibility': 'background',
         'stores': [],
     },
     # 历史/人工指定子表示例；正式周报运行按快照元数据动态发现，不受此列表限制。
@@ -353,6 +357,9 @@ def validate(cfg: dict) -> None:
         raise RuntimeError('feedback.page_wait_max 不能小于 page_wait_min')
     if feedback['detail_wait_max'] < feedback['detail_wait_min']:
         raise RuntimeError('feedback.detail_wait_max 不能小于 detail_wait_min')
+    if str(feedback.get('browser_visibility') or '').strip().lower() != 'background':
+        raise RuntimeError(
+            'feedback.browser_visibility 必须固定为 background，禁止Feedback任务弹出紫鸟窗口')
     try:
         max_pages = int(feedback.get('max_pages'))
     except (TypeError, ValueError):
