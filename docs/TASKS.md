@@ -1,5 +1,15 @@
 # TASKS: Amazon Daily
 
+## 2026-09-15 工作日稳态副本超时修复（进行中）
+
+- [x] 核对 15:30 失败批次 `20260915_153005`：调度器实际选择 `weekday_1530 / weekday_steady / seq-5`，但价格运行入口按新的 `run_id` 再次进入 `initialize_weekly_assets`，调用飞书 `drive/v1/files/MdyQsTZNxhk7GVtdhiucalxfneg/copy`，3 次均返回 `504 Gateway Timeout`；失败发生在子表发现、Amazon 抓取和固定结果表写入之前。
+- [x] 只读核对飞书根目录：未发现 `Amazon周报_seq-5_完整快照_20260915_153005_v3`，没有确认本次产生孤儿副本；`fixed_result.json` 和 `latest_run.json` 仍指向 07:30 已完成批次，固定结果表未被下午任务修改。
+- [x] 修复 `app/weekly_execution.py`：`monday_carryover`/`weekday_steady` 复用当前周期 `ready` 快照，不因每日价格 `run_id` 变化而复制；若当前 manifest 因复制超时处于 `initializing`，从同周期历史中最新 `ready` 快照恢复后再动态发现，不在稳态时段发起 Drive copy。周一 `monday_switch` 和无稳态快照时的安全停止规则保持不变。
+- [x] 新增两条回归：工作日新价格运行复用物理快照并更新最新运行身份；中断 manifest 从最新 ready 历史恢复且不调用 `initialize_weekly_assets`。定向测试 `12/12`、完整离线回归 `373/373` 通过；`compileall`、`git diff --check` 待本次运行前后再次执行。
+- [x] 正式重跑 `weekday_1530` 已完成：`run_id=20260915_154728`、`period_id=seq-5`、`selection_mode=weekday_steady`；复用历史最新 ready 快照 `Sxossjrf3hcRsitRjhhccqUxnBc`，未调用 Drive `/copy`，manifest 恢复为 `ready`、generation 保持 2。
+- [x] 全量处理 18 个业务子表、721 行基础数据：`ok=493`、`identity_mismatch=194`、`source_data_invalid=30`、`parse_error=4`；固定结果表写入 493 行、228 行门禁阻断，delivery `verified_true=493`、`verified_false=0`、写入失败 0。Feedback 按 15:30 规则 `skipped_schedule`，HTML保持关闭。
+- [x] 一次性通知应用协作者 8/8 成功；完整耗时 `4849.125` 秒（约 80 分 49.125 秒）。证据：`outputs/daily_runs/2026-09-15/20260915_154728_weekly_bundle.json`、`20260915_154728_weekly_summary.json`、`20260915_154728_delivery.json`、`20260915_154728_notifications.json`。飞书根目录回读未出现 `20260915_154728` 新快照，确认未重复创建副本。
+
 ## 2026-09-14 正式周报结构变化兼容（最新）
 
 - [x] 只读核对固定登记表发现新周期 `seq-5`（15:30 登记行），来源 Spreadsheet 当前为 23 个子表：18 个 PD/XD/PDF/CPD 业务表及 5 个辅助表；PD03/PD17/PD05 等工作表列容量和辅助表顺序相对上一周期发生变化。18 个业务表均可按业务表头发现，未知 Marketplace 为 0。

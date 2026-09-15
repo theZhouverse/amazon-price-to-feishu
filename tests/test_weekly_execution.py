@@ -94,6 +94,83 @@ class WeeklyExecutionTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '新增序号'):
                 execution.ensure_price_week(fc, store, selection, {}, {}, allow_create=True)
 
+    def test_weekday_steady_reuses_ready_snapshot_for_new_price_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = WeeklyAssetStore(Path(root))
+            data = {
+                'period_id': 'seq-5', 'generation': 2, 'status': 'ready', 'business_ready': True,
+                'mapping_ready': True, 'snapshot_run_id': 'morning-run',
+                'source': {'url': 'source-url'},
+                'snapshot': {'name': 'frozen', 'spreadsheet_token': 'snapshot-token',
+                             'url': 'snapshot-url', 'status': 'ready'},
+                'result': {'name': 'fixed', 'spreadsheet_token': 'result-token',
+                           'url': 'result-url', 'status': 'ready'},
+                'sheet_mappings': [{'result_sheet': 'PD03', 'marketplace': 'US'}],
+            }
+            store.save('seq-5', data)
+            execution.atomic_json(store.root / 'fixed_result.json', {
+                'name': 'fixed', 'spreadsheet_token': 'result-token',
+                'url': 'result-url', 'period_id': 'seq-5',
+            })
+            selection = SimpleNamespace(period_id='seq-5', source_url='source-url',
+                                        selection_mode='weekday_steady')
+            fc = Mock()
+            with patch.object(execution, 'initialize_weekly_assets') as initialize:
+                current = execution.ensure_price_week(
+                    fc, store, selection, {}, {}, allow_create=True,
+                    run_id='afternoon-run', resume=False)
+            initialize.assert_not_called()
+            self.assertEqual(current['snapshot']['spreadsheet_token'], 'snapshot-token')
+            self.assertEqual(current['result']['spreadsheet_token'], 'result-token')
+            self.assertEqual(current['snapshot_run_id'], 'afternoon-run')
+            self.assertEqual(current['generation'], data.get('generation'))
+            latest = json.loads((store.root / 'latest_run.json').read_text())
+            self.assertEqual(latest['run_id'], 'afternoon-run')
+            self.assertEqual(latest['snapshot_token'], 'snapshot-token')
+
+    def test_weekday_steady_recovers_latest_ready_history_after_failed_switch(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = WeeklyAssetStore(Path(root))
+            store.save('seq-5', {
+                'period_id': 'seq-5', 'status': 'initializing',
+                'business_ready': False, 'snapshot_run_id': 'failed-copy-run',
+                'source': {'url': 'source-url'}, 'snapshot': {}, 'result': {},
+                'history': [{
+                    'generation': 2,
+                    'snapshot': {'name': 'morning-copy',
+                                 'spreadsheet_token': 'morning-snapshot',
+                                 'url': 'morning-snapshot-url', 'status': 'ready'},
+                    'result': {'name': 'fixed', 'spreadsheet_token': 'result-token',
+                               'url': 'result-url', 'status': 'ready'},
+                }],
+                'resource_names': {
+                    'snapshot': 'failed-copy-name', 'result': 'failed-result-name'},
+            })
+            execution.atomic_json(store.root / 'fixed_result.json', {
+                'name': 'fixed', 'spreadsheet_token': 'result-token',
+                'url': 'result-url', 'period_id': 'seq-5',
+            })
+            selection = SimpleNamespace(period_id='seq-5', source_url='source-url',
+                                        selection_mode='weekday_steady')
+            fc = Mock()
+            with patch.object(execution, 'initialize_weekly_assets') as initialize, \
+                 patch.object(execution, 'build_discovery', return_value={'sheets': []}), \
+                 patch.object(execution, 'validate_discovery'), \
+                 patch.object(execution, 'audit_manifest_links', return_value={'invalid_count': 0}):
+                current = execution.ensure_price_week(
+                    fc, store, selection, {}, {}, allow_create=True,
+                    run_id='recovered-afternoon-run', resume=False)
+            initialize.assert_not_called()
+            self.assertEqual(current['status'], 'ready')
+            self.assertEqual(current['snapshot']['spreadsheet_token'], 'morning-snapshot')
+            self.assertEqual(current['result']['spreadsheet_token'], 'result-token')
+            self.assertEqual(current['snapshot_run_id'], 'recovered-afternoon-run')
+            self.assertEqual(current['recovered_from_generation'], 2)
+            self.assertEqual(current['resource_names']['snapshot'], 'morning-copy')
+            self.assertEqual(current['resource_names']['result'], 'fixed')
+            latest = json.loads((store.root / 'latest_run.json').read_text())
+            self.assertEqual(latest['run_id'], 'recovered-afternoon-run')
+
     def test_dry_run_never_initializes_new_week(self):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(execution, 'initialize_weekly_assets') as init:

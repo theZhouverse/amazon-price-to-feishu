@@ -14,6 +14,76 @@ from runtime_state import atomic_json
 from publication_guard import claim_latest_run, assert_latest_run
 
 
+STEADY_SELECTION_MODES = {'monday_carryover', 'weekday_steady'}
+
+
+def _is_ready_snapshot_manifest(manifest: dict | None, fixed: dict | None) -> bool:
+    """Return whether a manifest contains a usable frozen source/result pair."""
+    if not manifest or manifest.get('status') != 'ready':
+        return False
+    snapshot = manifest.get('snapshot') or {}
+    result = manifest.get('result') or {}
+    snapshot_token = str(snapshot.get('spreadsheet_token') or '')
+    result_token = str(result.get('spreadsheet_token') or '')
+    if not snapshot_token or not result_token or snapshot_token == result_token:
+        return False
+    if fixed and result_token != str(fixed.get('spreadsheet_token') or ''):
+        return False
+    return snapshot.get('status') in (None, '', 'ready') and \
+        result.get('status') in (None, '', 'ready')
+
+
+def _steady_manifest(old: dict | None, fixed: dict | None) -> dict | None:
+    """Reuse the current period's frozen snapshot outside the switch window.
+
+    A failed switch can leave the current manifest in ``initializing`` after
+    its previous ready resources have already been moved to ``history``.  A
+    carryover/steady run may safely restore the newest ready history entry;
+    it must never create a new Drive copy merely because its price ``run_id``
+    is new.  The returned object is a copy and can be assigned this run's
+    identity by ``_prepare_price_run`` without mutating the previous run.
+    """
+    if _is_ready_snapshot_manifest(old, fixed):
+        manifest = deepcopy(old)
+    else:
+        manifest = None
+        for entry in reversed((old or {}).get('history') or []):
+            snapshot = entry.get('snapshot') or {}
+            result = entry.get('result') or {}
+            candidate = {
+                'status': 'ready',
+                'snapshot': snapshot,
+                'result': result,
+            }
+            if _is_ready_snapshot_manifest(candidate, fixed):
+                manifest = deepcopy(old or {})
+                manifest['snapshot'] = deepcopy(snapshot)
+                manifest['result'] = deepcopy(fixed or result)
+                manifest['generation'] = entry.get('generation') or manifest.get('generation')
+                manifest['status'] = 'ready'
+                manifest['recovered_from_generation'] = entry.get('generation')
+                break
+    if not manifest:
+        return None
+
+    # A failed initialization may not have rebuilt the dynamic mappings yet.
+    # Keep the frozen resources but force discovery before any write in that
+    # case; never claim business readiness from a half-written manifest.
+    if not manifest.get('mapping_ready') or not manifest.get('sheet_mappings'):
+        manifest.pop('sheet_mappings', None)
+        manifest['mapping_ready'] = False
+        manifest['business_ready'] = False
+        manifest['base_sync_pending'] = True
+    if fixed:
+        manifest['result'] = {**(manifest.get('result') or {}), **fixed,
+                              'status': 'ready'}
+    manifest['resource_names'] = {
+        'snapshot': (manifest.get('snapshot') or {}).get('name') or '',
+        'result': (manifest.get('result') or {}).get('name') or '',
+    }
+    return manifest
+
+
 def price_only_config(cfg):
     return {**cfg, 'html_archive_enabled': False, 'html_archive_required': False,
             'html_server_enabled': False, '_html_server_base_url': ''}
@@ -73,6 +143,40 @@ def _prepare_price_run(fc, store, selection, registry, cfg, run_id, allow_create
         raise RuntimeError('周期结果表与固定结果表不一致')
     if resume and (not old or old.get('snapshot_run_id') != run_id):
         raise RuntimeError('只能恢复当前登记批次；禁止旧批次覆盖最新基础数据')
+
+    selection_mode = str(getattr(selection, 'selection_mode', '') or '').strip()
+    if selection_mode in STEADY_SELECTION_MODES:
+        # Carryover and weekday-steady slots are explicitly read-only with
+        # respect to cloud-copy creation.  The daily price run receives a new
+        # identity, while the period's physical frozen snapshot is reused.
+        manifest = _steady_manifest(old, fixed)
+        if not manifest:
+            raise RuntimeError(
+                f'{selection_mode} 缺少可复用的 ready 周报快照，必须先完成周一15:30换周')
+        manifest['snapshot_run_id'] = run_id
+        manifest['readonly_preview'] = not allow_create
+        if allow_create:
+            store.save(selection.period_id, manifest)
+            claim_latest_run(store, manifest, run_id)
+        if manifest.get('mapping_ready'):
+            return manifest
+        # An interrupted switch may have retained only the frozen resources;
+        # rebuild the dynamic mapping below without creating another copy.
+        discovery = build_discovery(fc, manifest['snapshot']['spreadsheet_token'])
+        validate_discovery(discovery)
+        manifest['sheet_mappings'] = [item for item in discovery['sheets']
+                                      if item['status'] in ('mapped', 'mapped_empty')]
+        audit = audit_manifest_links(fc, manifest)
+        atomic_json(store.root / selection.period_id / 'link_audit.json', audit)
+        if audit['invalid_count']:
+            raise RuntimeError('本批商品链接审计失败，固定结果表未修改')
+        manifest.update(mapping_ready=True, business_ready=False,
+                        base_sync_pending=True)
+        if allow_create:
+            store.save(selection.period_id, manifest)
+            claim_latest_run(store, manifest, run_id)
+        return manifest
+
     if resume and allow_create and old.get('mapping_ready'):
         # A run can fail after its manifest/snapshot is ready but before the
         # latest-run claim (for example during discovery).  If the current
