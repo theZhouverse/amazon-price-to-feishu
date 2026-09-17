@@ -1359,6 +1359,42 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
         return result
 
 
+def _reconcile_source_fingerprints(manifest: dict, fingerprints: dict,
+                                   run_id: str, *, strict: bool,
+                                   previous_run_id: str = '') -> dict:
+    """Bind base-field fingerprints to one price run, not the whole week.
+
+    Feishu formulas/helper columns in a frozen copy can recalculate between
+    the morning and afternoon jobs. A normal *new* run must use the newly
+    observed 18-tab input and record that drift; only an explicit recovery of
+    the same run is required to match its original fingerprint. This keeps
+    fetch/publish recovery safe without turning weekly formula refreshes into a
+    false cross-run block.
+    """
+    current = manifest.get('source_fingerprints')
+    if current is not None and current != fingerprints and strict:
+        raise RuntimeError('本批快照基础字段已改变，禁止继续复用旧价格')
+    changed = sorted({key for key in
+                      (set(current or {}) | set(fingerprints))
+                      if (current or {}).get(key) != fingerprints.get(key)})
+    previous_run_id = str(previous_run_id or
+                          manifest.get('source_fingerprint_run_id') or
+                          manifest.get('snapshot_run_id') or '')
+    if current is not None and current != fingerprints:
+        manifest['source_fingerprint_drift'] = {
+            'from_run_id': previous_run_id,
+            'to_run_id': run_id,
+            'changed_sheets': changed,
+            'observed_at': datetime.now().isoformat(timespec='seconds'),
+            'policy': 'new_run_accepts_current_snapshot_and_records_drift',
+        }
+    manifest['source_fingerprints'] = dict(fingerprints)
+    manifest['source_fingerprint_run_id'] = run_id
+    manifest['source_fingerprint_captured_at'] = datetime.now().isoformat(
+        timespec='seconds')
+    return manifest.get('source_fingerprint_drift') or {}
+
+
 def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logger) -> None:
     """Price-only daily flow; HTML services are never a prerequisite."""
     from datetime import timedelta, timezone
@@ -1386,6 +1422,10 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
         assert_registry_fresh(
             store, selection, datetime.now(timezone(timedelta(hours=8))),
             cfg.get('weekly_registry_max_age_days', 8.0))
+    previous_manifest = store.load(selection.period_id) or {}
+    previous_fingerprint_run_id = str(
+        previous_manifest.get('source_fingerprint_run_id') or
+        previous_manifest.get('snapshot_run_id') or '')
     manifest = ensure_price_week(fc, store, selection, registry, cfg,
                                  allow_create=not args.dry_run and not args.fetch_only,
                                  run_id=(run_id := _price_run_id(store, selection.period_id, args)),
@@ -1411,9 +1451,26 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
         raise RuntimeError('请求的子表不在本周 manifest 映射中')
     plans = _read_source_plan(fc, manifest['snapshot']['spreadsheet_token'], selected, cfg)
     fingerprints = {p['mapping']['result_sheet']: base_fingerprint(p) for p in plans}
-    if manifest.get('source_fingerprints') is not None and manifest['source_fingerprints'] != fingerprints:
-        raise RuntimeError('本批快照基础字段已改变，禁止继续复用旧价格')
-    manifest['source_fingerprints'] = fingerprints
+    recovery_requested = bool(getattr(args, 'resume', False) or
+                              getattr(args, 'run_id', None))
+    fingerprint_run_id = str(manifest.get('source_fingerprint_run_id') or '')
+    # A legacy/interrupted manifest can carry the new run's snapshot_run_id
+    # before it ever captured a fingerprint (the old implementation failed at
+    # that point).  Such a pre-fetch recovery is allowed to bind the current
+    # 18-tab input once; a recovery with an existing same-run fingerprint, or a
+    # legacy run that already has its local source snapshot, stays strict.
+    legacy_snapshot_ready = bool(
+        not fingerprint_run_id and
+        (OUTPUT_DIR / 'snapshots' / run_id / 'source.json').is_file())
+    strict_fingerprint = recovery_requested and (
+        fingerprint_run_id == run_id or legacy_snapshot_ready)
+    _reconcile_source_fingerprints(
+        manifest, fingerprints, run_id, strict=strict_fingerprint,
+        previous_run_id=previous_fingerprint_run_id)
+    if not args.dry_run and not args.fetch_only:
+        # Persist the fingerprint binding before Amazon work starts so an
+        # interrupted run can resume against exactly this run's base rows.
+        store.save(selection.period_id, manifest)
     rows_by_sheet = {plan['mapping']['result_sheet']: list(plan['valid_rows'])
                      for plan in plans if plan['valid_rows']}
     invalid_by_sheet = {plan['mapping']['result_sheet']: list(plan['invalid'])
@@ -1498,6 +1555,10 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
             **feedback_report,
             'price_tolerance': str(cfg['price_tolerance']),
             'source_fingerprints': fingerprints,
+            'source_fingerprint_run_id': manifest.get(
+                'source_fingerprint_run_id', run_id),
+            'source_fingerprint_drift': manifest.get(
+                'source_fingerprint_drift') or {},
             'snapshot_spreadsheet_token': manifest['snapshot']['spreadsheet_token'],
             'result_spreadsheet_token': manifest['result']['spreadsheet_token'],
             'created_at': datetime.now().isoformat(),

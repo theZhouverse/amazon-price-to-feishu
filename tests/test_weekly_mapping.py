@@ -52,6 +52,38 @@ class TestWeeklyMapping(unittest.TestCase):
         self.assertEqual(fc.read_values.call_args_list[0].args,
                          ('snapshot-token', 'us', 'A1:Z10'))
 
+    def test_exactly_18_business_tabs_are_a_valid_complete_input(self):
+        """只存在18个价格业务子表时，不要求额外辅助表。"""
+        titles = [
+            'PD03', 'PD17', 'PD05', 'PD25', 'XD03', 'XD17', 'PD52',
+            'PD39', 'PD33', 'PDF075', 'PD63', 'CPD03', 'CPD17', 'CPD05',
+            'CPD25', 'CPD39', 'CPD33', 'CPD52',
+        ]
+        header = ['ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式',
+                  '本周折扣%', '目标成交价']
+        metadata = [
+            {'sheet_id': f's{i}', 'title': title,
+             'grid_properties': {'row_count': 2, 'column_count': 12}}
+            for i, title in enumerate(titles)
+        ]
+        fc = Mock()
+        fc.query_sheets.return_value = metadata
+
+        def read_values(_token, sid, rng):
+            if rng.endswith('10'):
+                return [header]
+            index = int(sid[1:])
+            asin = f'B0ABCDEF{index:02d}'
+            return [[asin]]
+
+        fc.read_values.side_effect = read_values
+        report = build_discovery(fc, 'snapshot-token')
+        validate_discovery(report)
+        self.assertEqual(report['sheet_count'], 18)
+        self.assertEqual(report['mapped_count'], 18)
+        self.assertEqual(report['unknown_count'], 0)
+        self.assertEqual(report['excluded_count'], 0)
+
     def test_unknown_and_duplicate_are_blocking(self):
         report = {'duplicate_result_sheets': [], 'unknown_sheets': ['Mystery'],
                   'mapped_count': 1}

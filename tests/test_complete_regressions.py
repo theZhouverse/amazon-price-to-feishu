@@ -200,6 +200,33 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(report['written_rows'], 0)
         self.assertFalse(fc.writes)
 
+
+class SourceFingerprintTests(unittest.TestCase):
+    def test_new_scheduled_run_accepts_formula_drift_and_rebinds(self):
+        manifest = {
+            'snapshot_run_id': 'morning',
+            'source_fingerprints': {'PD03': 'old', 'CPD03': 'old-ca'},
+        }
+        drift = main._reconcile_source_fingerprints(
+            manifest, {'PD03': 'new', 'CPD03': 'new-ca'},
+            'afternoon', strict=False)
+        self.assertEqual(manifest['source_fingerprint_run_id'], 'afternoon')
+        self.assertEqual(manifest['source_fingerprints']['PD03'], 'new')
+        self.assertEqual(drift['from_run_id'], 'morning')
+        self.assertEqual(drift['to_run_id'], 'afternoon')
+        self.assertEqual(drift['changed_sheets'], ['CPD03', 'PD03'])
+
+    def test_same_run_recovery_still_rejects_base_drift(self):
+        manifest = {
+            'snapshot_run_id': 'run1',
+            'source_fingerprint_run_id': 'run1',
+            'source_fingerprints': {'PD03': 'old'},
+        }
+        with self.assertRaisesRegex(RuntimeError, '基础字段已改变'):
+            main._reconcile_source_fingerprints(
+                manifest, {'PD03': 'new'}, 'run1', strict=True)
+
+
 class RuntimeTests(unittest.TestCase):
     def test_source_header_detection_matches_discovery(self):
         from feishu import _detect_header_row, _resolve_cols

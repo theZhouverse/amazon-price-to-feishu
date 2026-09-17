@@ -201,7 +201,14 @@ def _publish_price_rows(fc, store, manifest, plans, results, run_id, checkpoint)
     # Validate all inputs and existing layouts before the first cloud mutation.
     for plan in plans:
         title = plan['mapping']['result_sheet']
-        if manifest.get('source_fingerprints') is not None and manifest['source_fingerprints'].get(title) != base_fingerprint(plan):
+        fingerprint_run_id = str(manifest.get('source_fingerprint_run_id') or '')
+        # A fingerprint captured by the current run remains strict between
+        # fetch and publish. Legacy manifests without the new field are also
+        # strict for the run being published; a normal new run replaces the
+        # fingerprint before reaching this function.
+        fingerprint_strict = not fingerprint_run_id or fingerprint_run_id == run_id
+        if (fingerprint_strict and manifest.get('source_fingerprints') is not None
+                and manifest['source_fingerprints'].get(title) != base_fingerprint(plan)):
             raise RuntimeError(f'[{title}] 快照基础字段发生变化，禁止混用旧价格')
         by_asin = {}
         for cr in results[title]:
