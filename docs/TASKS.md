@@ -1,5 +1,12 @@
 # TASKS: Amazon Daily
 
+## 2026-09-17 15:30 手动补跑18表（已完成，partial）
+
+- [x] 使用正式入口 `.venv\\Scripts\\python.exe app\\main.py --weekly-run --confirm --scheduled-slot weekday_1530 --force-fetch` 启动新运行 `20260917_155600`；来源 `seq-5/weekday_steady`，未启用 HTML 归档，单进程4个互斥 Tab。
+- [x] 18/18 业务子表全部完成抓取：`ok=483`、`identity_mismatch=196`、`source_data_invalid=38`、`parse_error=4`；币种 `USD=551`、`CAD=170`。身份不一致和源数据无效行均保留在阻断/恢复清单，未伪造价格。
+- [x] 固定结果表完成写后回读：`base_rows_written=721`、`frontend_checks_written=721`、`written_rows=483`、`blocked=238`、`failures=0`，批次状态 `partial`；前端检查统计 `pass=2282`、`fail=1095`、`unknown=1670`。
+- [x] 本批完整耗时 `4623.219s`（约 `77.05` 分钟）；15:30 槽位按规则跳过 Feedback（`skipped_schedule`），8/8 应用协作者通知成功，Chrome 无残留进程。证据：`outputs/daily_runs/2026-09-17/20260917_155600_weekly_bundle.json`、`20260917_155600_delivery.json`、`20260917_155600_weekly_summary.json`、`20260917_155600_notifications.json`、`outputs/logs/run_20260917_1555.log`。
+
 ## 2026-09-17 18个业务子表新run指纹漂移误阻断（已修复）
 
 - [x] 核对 `20260917_1530` 任务：来源选择和18个业务子表读取阶段正常，失败发生在抓取前的跨run `source_fingerprints` 比较；同一物理快照的公式/辅助字段在07:30与15:30之间重新计算，旧逻辑把合法的新run误判为“禁止继续复用旧价格”。
