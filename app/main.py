@@ -257,6 +257,7 @@ def row_from_dict(d: dict) -> ReportRow:
         normal_price=dec(d.get('normal_price')),
         h_type=d.get('h_type') or '',
         i_value=dec(d.get('i_value')),
+        i_raw=d.get('i_raw', d.get('i_value')),
         target_price=dec(d.get('target_price')),
         target_price_source=d.get('target_price_source') or 'missing',
         marketplace=d.get('marketplace') or 'US',

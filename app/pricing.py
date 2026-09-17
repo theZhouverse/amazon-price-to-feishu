@@ -25,6 +25,10 @@ _TYPE_MAP = {
 # 预期类型候选（含归一化键）
 _EXPECTED_KEYS = ('coupon', 'code', '价格折扣', '价格打折', '原价调整', '原价定档',
                   '原价', 'sale', 'sales', 'deal', 'bd', 'ld', 'dod', 'promo', 'promotion')
+_ORIGINAL_PRICE_TYPES = {'原价调整', '原价定档', '原价'}
+_SOURCE_PRICE_RANGE_RE = re.compile(
+    r'^\s*([0-9]+(?:\.[0-9]+)?)\s*[-–—]\s*([0-9]+(?:\.[0-9]+)?)\s*$'
+)
 
 
 def dec(x) -> Decimal | None:
@@ -109,16 +113,31 @@ def normalize_type(f: str) -> str | None:
 
 
 def calc_target_price(row: ReportRow) -> Decimal | None:
-    """目标成交价（K 列公式逻辑，用户确认）:
-    H=原价调整/原价定档/原价 且 I>1 → 目标=I（绝对值价格）；
-    I 空/0 → E；0<I<1 → E×(1−I)；异常 → E"""
+    """Calculate the target price using the weekly-report formula semantics.
+
+    The original-price branch is deliberately fail-closed: an empty or
+    nonnumeric discount value must not silently become the normal price.  A
+    source range such as ``26.99-28.99`` follows the current report formula's
+    right-hand value.  Other discount types retain the historical E fallback
+    for blank/zero values.
+    """
     e = row.normal_price
     if e is None:
         return None
     i = dec(row.i_value)
     h = (row.h_type or '').strip()
-    if h in ('原价调整', '原价定档', '原价') and i is not None and i > 1:
-        return q2(i)
+    if h in _ORIGINAL_PRICE_TYPES:
+        if i is None:
+            raw = getattr(row, 'i_raw', None)
+            if isinstance(raw, str):
+                match = _SOURCE_PRICE_RANGE_RE.fullmatch(raw)
+                if match:
+                    i = dec(match.group(2))
+        if i is None or i < 0:
+            return None
+        if i > 1:
+            return q2(i)
+        return q2(e * (1 - i))
     if i is None or i == 0:
         return q2(e)
     if 0 < i < 1:

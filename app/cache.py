@@ -60,7 +60,7 @@ def data_signature(rows: list[ReportRow]) -> str:
     h = hashlib.sha256()
     for r in rows:
         h.update(f'{r.asin}|{r.sku}|{r.size}|{r.normal_price}|{r.h_type}|'
-                 f'{r.i_value}|{r.target_price}|{r.marketplace}|{r.product_url};'.encode())
+                 f'{r.i_value}|{r.i_raw}|{r.target_price}|{r.marketplace}|{r.product_url};'.encode())
     return h.hexdigest()[:16]
 
 

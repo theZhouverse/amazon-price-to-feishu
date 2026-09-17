@@ -7,7 +7,7 @@ from decimal import Decimal
 import hashlib
 import json
 
-from feishu import COMPACT_BASE_HEADERS, read_source_rows, col_letter
+from feishu import COMPACT_BASE_HEADERS, read_source_rows, col_letter, display_source_discount
 from frontend_checks import FRONTEND_HEADERS
 from models import PageStatus
 from weekly_assets import WeeklyAssetStore, assert_result_write_target
@@ -27,17 +27,15 @@ RESULT_HEADERS = PRICE_RESULT_HEADERS + list(FRONTEND_HEADERS) + ['时间戳', '
 
 
 def _display_discount(value):
-    if isinstance(value, Decimal) and 0 < value < 1:
-        text = format(value * 100, 'f').rstrip('0').rstrip('.')
-        return f'{text}%'
-    return value if value is not None else ''
+    """Backward-compatible renderer when only the normalized value exists."""
+    return display_source_discount(value, value if isinstance(value, Decimal) else None)
 
 
 def _base_values(row) -> list:
     return [
         row.asin, row.sku, row.size,
         row.normal_price if row.normal_price is not None else '',
-        row.h_type, _display_discount(row.i_value),
+        row.h_type, display_source_discount(row.i_raw, row.i_value),
         row.target_price if row.target_price is not None else '',
     ]
 

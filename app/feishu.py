@@ -21,7 +21,7 @@ from models import (
     CrawlResult, ReportRow, TARGET_SOURCE_EXCEL, TARGET_SOURCE_FALLBACK,
     TARGET_SOURCE_FEISHU, TARGET_SOURCE_MISSING,
 )
-from pricing import calc_target_price, dec
+from pricing import calc_target_price, dec, format_pct
 from weekly_registry import parse_registry_values
 
 FEISHU_BASE = 'https://open.feishu.cn/open-apis'
@@ -210,13 +210,15 @@ def read_source_rows(vals: list[list], cfg: dict,
                 raise RuntimeError(f'源行{idx}商品链接无效: {exc}') from exc
             continue
         sku = str(_cell(cols['sku']) or '').strip()
+        raw_i_value = _cell(cols['i_value'])
         rr = ReportRow(
             row_num=idx, asin=asin,
             sku=sku,
             size=_resolve_source_size(_cell(cols.get('size', 4)), sku),
             normal_price=_num_or_none(_cell(cols['normal_price'])),
             h_type=str(_cell(cols['h_type']) or '').strip(),
-            i_value=_parse_i_value(_cell(cols['i_value'])),
+            i_value=_parse_i_value(raw_i_value),
+            i_raw=raw_i_value,
             # 经过域名/ASIN校验的源链接优先用于请求；纯 ASIN 行回退标准链接。
             product_url=source_url or canonical_url,
             source_product_url=source_url,
@@ -1100,19 +1102,13 @@ class FeishuClient:
             self.write_values(spreadsheet, sheet_id, f'A{start}:M{end}',
                               [[''] * 13 for _ in range(end - start + 1)])
 
-        def _i_display(v):
-            if isinstance(v, Decimal) and 0 < v < 1:
-                text = format(v * 100, 'f').rstrip('0').rstrip('.')
-                return f'{text}%'
-            return v if v is not None else ''
-
         values = [[
             r.asin,
             r.sku,
             r.size,
             r.normal_price,
             r.h_type,
-            _i_display(r.i_value),
+            display_source_discount(r.i_raw, r.i_value),
             r.target_price,
         ] for r in rows]
         if values:
@@ -1329,6 +1325,38 @@ def _parse_i_value(v):
             except (InvalidOperation, ZeroDivisionError):
                 return None
     return _num_or_none(v)
+
+
+def display_source_discount(raw, parsed=None):
+    """Render the source I-column without discarding business status text.
+
+    ``parsed`` is the normalized numeric value used by pricing.  The source
+    value remains authoritative for A:G display: statuses such as ``断货`` or
+    ``无库存`` and ranges such as ``26.99-28.99`` must not silently become an
+    empty cell.  Numeric fractions are rendered with the shared, rounded
+    percentage formatter; absolute values remain source text/number.
+    """
+    if raw is None:
+        if parsed is not None and 0 < parsed < 1:
+            return format_pct(parsed)
+        return '' if parsed is None else parsed
+
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return ''
+        if parsed is None:
+            return text
+        # Keep an explicitly formatted source percentage exactly as entered.
+        if text.endswith('%'):
+            return text
+        if 0 < parsed < 1:
+            return format_pct(parsed)
+        return text
+
+    if parsed is not None and 0 < parsed < 1:
+        return format_pct(parsed)
+    return raw
 
 
 def _group_contiguous(pairs: list[tuple[int, object]]):

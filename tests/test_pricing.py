@@ -57,6 +57,19 @@ class TestTargetPrice(unittest.TestCase):
         self.assertEqual(calc_target_price(mk_row('49.99', h='原价调整', i=Decimal('39.99'))),
                          Decimal('39.99'))
 
+    def test_original_adjust_blank_is_missing_not_normal_price(self):
+        self.assertIsNone(calc_target_price(mk_row('49.99', h='原价调整')))
+
+    def test_original_adjust_range_uses_right_hand_price(self):
+        row = mk_row('49.99', h='原价调整')
+        row.i_raw = '26.99-28.99'
+        self.assertEqual(calc_target_price(row), Decimal('28.99'))
+
+    def test_original_adjust_status_is_missing_not_normal_price(self):
+        row = mk_row('49.99', h='原价调整')
+        row.i_raw = '断货'
+        self.assertIsNone(calc_target_price(row))
+
     def test_no_price(self):
         self.assertIsNone(calc_target_price(mk_row(normal=None)))
 

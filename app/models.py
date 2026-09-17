@@ -42,7 +42,8 @@ class ReportRow:
     size: str = ''                       # 尺寸（源表“尺寸”列）
     normal_price: Decimal | None = None   # 正常售价 E 列
     h_type: str = ''                # 本周折扣形式
-    i_value: str | Decimal | None = None  # 本周折扣值（原值，可为 % 文本或金额）
+    i_value: Decimal | None = None        # 本周折扣值（规范化数值：百分比按小数保存）
+    i_raw: str | Decimal | None = None    # 本周折扣值源文本（断货/无库存/区间等必须保留）
     target_price: Decimal | None = None   # 目标成交价（K 列公式结果）
     target_price_source: str = TARGET_SOURCE_MISSING   # 来源追踪
     marketplace: str = 'US'
@@ -55,6 +56,7 @@ class ReportRow:
             'normal_price': str(self.normal_price) if self.normal_price is not None else None,
             'h_type': self.h_type,
             'i_value': str(self.i_value) if self.i_value is not None else None,
+            'i_raw': str(self.i_raw) if self.i_raw is not None else None,
             'target_price': str(self.target_price) if self.target_price is not None else None,
             'target_price_source': self.target_price_source,
             'marketplace': self.marketplace, 'product_url': self.product_url,

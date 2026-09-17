@@ -14,7 +14,7 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from feishu import FeishuClient, read_source_rows
+from feishu import FeishuClient, display_source_discount, read_source_rows
 from config import DEFAULTS
 
 
@@ -112,6 +112,25 @@ class TestReadSourceRows(unittest.TestCase):
         # H=原价调整 且 I=0.20 (0<i<1) → target = E*(1-0.2)
         self.assertEqual(rows[0].i_value, Decimal('0.20'))
         self.assertEqual(rows[0].target_price, Decimal('27.19'))
+
+    def test_i_value_status_is_preserved_separately_from_numeric_value(self):
+        data = pd03_layout()
+        data[2][8] = '断货'
+        data[2][10] = 37.99  # 保留一条可写入的结果行，验证源文本不会丢失
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertFalse(invalid)
+        self.assertIsNone(rows[0].i_value)
+        self.assertEqual(rows[0].i_raw, '断货')
+        self.assertEqual(display_source_discount(rows[0].i_raw, rows[0].i_value), '断货')
+
+    def test_i_value_range_is_preserved_and_used_by_original_price_fallback(self):
+        data = pd03_layout()
+        data[2][8] = '26.99-28.99'
+        rows, invalid = read_source_rows(data, mk_cfg())
+        self.assertFalse(invalid)
+        self.assertIsNone(rows[0].i_value)
+        self.assertEqual(rows[0].i_raw, '26.99-28.99')
+        self.assertEqual(rows[0].target_price, Decimal('28.99'))
 
     def test_missing_header_raises(self):
         with self.assertRaises(RuntimeError):
