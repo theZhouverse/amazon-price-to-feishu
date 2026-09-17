@@ -18,6 +18,10 @@ class TestWeeklyMapping(unittest.TestCase):
         self.assertEqual(classify_sheet('CPD03', False, False)[0], 'CA')
         self.assertEqual(classify_sheet('PD17', False, False)[0], 'US')
         self.assertEqual(classify_sheet('BI源数据', True, True)[0], 'excluded')
+        self.assertEqual(classify_sheet(
+            '部门SKU维护', True, True,
+            ['序号', '父ASIN', 'ASIN', 'MSKU', 'SKU', '商品图片', '尺寸'])[0],
+            'excluded')
         self.assertEqual(classify_sheet('Mystery', True)[0], 'unknown')
         complete = ['ASIN', 'SKU', '尺寸', '正常售价', '本周折扣形式',
                     '本周折扣%', '目标成交价']

@@ -10,6 +10,13 @@ from pathlib import Path
 ASIN_RE = re.compile(r'\b(B0[A-Z0-9]{8})\b', re.IGNORECASE)
 US_SHEET_RE = re.compile(r'^(?:PD|XD|PDF)', re.IGNORECASE)
 CA_SHEET_RE = re.compile(r'^CPD', re.IGNORECASE)
+# Operational/helper tabs may expose an ASIN lookup column without being a
+# price-capture business tab.  Keep this list narrow: a complete unknown tab
+# still has to pass the Marketplace evidence gate instead of being skipped.
+AUXILIARY_TITLE_RE = re.compile(
+    r'(?:汇总|维护|透视|标准|限价|源数据|销售目标|父体|部门sku|skc|分析)',
+    re.IGNORECASE,
+)
 
 # Source-weekly fields are a contract by business name, not by physical
 # column.  The weekly report is allowed to insert helper/strategy columns in
@@ -215,6 +222,13 @@ def classify_sheet(title: str, has_asin: bool,
         return 'excluded', 'generic_auxiliary_asin_sheet'
     if title.strip().upper().startswith('BI'):
         return 'excluded', 'explicit_auxiliary_bi_source'
+    # A named helper tab such as “部门SKU维护” can contain ASIN values but
+    # lacks the complete seven-field source contract.  Exclude only that
+    # incomplete shape; if it later becomes a complete business tab, continue
+    # through the normal country/URL routing and fail closed when ambiguous.
+    if (has_asin and not schema['complete']
+            and AUXILIARY_TITLE_RE.search(str(title or '').strip())):
+        return 'excluded', 'known_auxiliary_title'
     if CA_SHEET_RE.match(title):
         if has_asin:
             return 'CA', 'title_prefix_cpd'

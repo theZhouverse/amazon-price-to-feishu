@@ -125,22 +125,71 @@ def structure_shape(structure: dict) -> dict:
     may legitimately change while a Drive copy is being materialised.  They
     are valuable audit evidence, but are not a reliable definition of whether
     the copied workbook has the same shape.  Copy validation therefore uses
-    only ordered sheet identity and grid capacity here; business headers and
-    required fields are validated by ``weekly_mapping`` before any fetch.
+    only the ordered *business* tabs and their grid capacity.  Auxiliary tabs
+    may be added, removed, or reordered by the weekly workbook owner; they are
+    not a price-capture input and must not make an otherwise complete copy
+    fail.  Business headers and Marketplace are validated by
+    ``weekly_mapping`` before any fetch.
     """
-    sheets = []
-    for item in (structure or {}).get('sheets') or []:
-        sheets.append({
+    all_sheets = list((structure or {}).get('sheets') or [])
+
+    def is_business(item: dict) -> bool:
+        title = str(item.get('title') or '').strip()
+        # Prefixes are the contractual business-tab routes.  Descriptive new
+        # tabs are included when their probe contains the complete source
+        # schema; discovery will subsequently require explicit US/CA evidence.
+        if re.match(r'^(?:PD|XD|PDF|CPD)', title, re.IGNORECASE):
+            return True
+        sample = item.get('sample') or []
+        try:
+            from weekly_mapping import find_asin_header, source_schema
+            located = find_asin_header(sample)
+            if not located:
+                return False
+            header = sample[located[0] - 1]
+            return bool(source_schema(header).get('complete'))
+        except (TypeError, IndexError):
+            # A malformed auxiliary sample is not allowed to weaken the copy
+            # gate; the complete source discovery step remains fail-closed.
+            return False
+
+    business = []
+    auxiliary_titles = []
+    for item in all_sheets:
+        entry = {
             'title': str(item.get('title') or ''),
-            'index': item.get('index'),
+            # Absolute Sheet index is intentionally omitted: inserting or
+            # reordering auxiliary tabs must not look like business drift.
             'row_count': item.get('row_count'),
             'column_count': item.get('column_count'),
-        })
-    return {'sheet_count': len(sheets), 'sheets': sheets}
+        }
+        if is_business(item):
+            business.append(entry)
+        else:
+            auxiliary_titles.append(entry['title'])
+    return {
+        # Retain total counts for audit, while comparison below uses only the
+        # business list. Existing manifest readers can continue to inspect
+        # ``sheets`` without learning a second shape format.
+        'sheet_count': len(all_sheets),
+        'business_sheet_count': len(business),
+        'auxiliary_sheet_count': len(auxiliary_titles),
+        'auxiliary_titles': auxiliary_titles,
+        'sheets': business,
+    }
 
 
 def structure_shape_sha256(structure: dict) -> str:
-    canonical = json.dumps(structure_shape(structure), ensure_ascii=False,
+    shape = structure_shape(structure)
+    # The digest is intentionally limited to the compared business shape.  If
+    # an auxiliary tab is added/reordered, the audit fields below still show
+    # that fact, but the stable-shape fingerprint must not change or appear as
+    # a false copy-integrity drift.
+    canonical = json.dumps({
+        'business_sheet_count': shape.get('business_sheet_count',
+                                          len(shape.get('sheets') or [])),
+        'sheets': shape.get('sheets') or [],
+    }, ensure_ascii=False,
                             sort_keys=True, separators=(',', ':'), default=str)
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
@@ -148,8 +197,11 @@ def structure_shape_sha256(structure: dict) -> str:
 def compare_structure_shape(expected: dict, actual: dict) -> dict:
     """Compare stable workbook metadata and return an auditable diff.
 
-    A positional comparison is intentional: the source order is retained in
-    result-sheet creation and a copy that drops/reorders a tab is unsafe.  A
+    The comparison is positional only within the business-tab list: source
+    order is retained for result-sheet creation, so a copied workbook that
+    drops/reorders business tabs or changes their grid capacity is unsafe.
+    Auxiliary tabs are intentionally excluded from this gate, allowing the
+    workbook owner to add or reorder helper tabs without blocking a copy.  A
     changed formula/value sample does not fail this check; the later dynamic
     discovery step remains responsible for required business headers and
     Marketplace routing.
@@ -157,12 +209,15 @@ def compare_structure_shape(expected: dict, actual: dict) -> dict:
     left = structure_shape(expected)
     right = structure_shape(actual)
     differences = []
-    if left['sheet_count'] != right['sheet_count']:
+    left_count = left.get('business_sheet_count', len(left.get('sheets') or []))
+    right_count = right.get('business_sheet_count', len(right.get('sheets') or []))
+    if left_count != right_count:
         differences.append(
-            f"sheet_count {left['sheet_count']} != {right['sheet_count']}")
-    for pos in range(max(len(left['sheets']), len(right['sheets']))):
-        before = left['sheets'][pos] if pos < len(left['sheets']) else None
-        after = right['sheets'][pos] if pos < len(right['sheets']) else None
+            f"business_sheet_count {left_count} != {right_count}")
+    for pos in range(max(len(left.get('sheets') or []),
+                         len(right.get('sheets') or []))):
+        before = left['sheets'][pos] if pos < len(left.get('sheets') or []) else None
+        after = right['sheets'][pos] if pos < len(right.get('sheets') or []) else None
         if before != after:
             differences.append(
                 f"sheet[{pos}] {before!r} != {after!r}")

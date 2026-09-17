@@ -46,6 +46,39 @@ class TestWeeklyAssets(unittest.TestCase):
         self.assertFalse(rejected['compatible'])
         self.assertIn('column_count', rejected['differences'][0])
 
+    def test_structure_shape_allows_auxiliary_tabs_added_or_reordered(self):
+        """辅助表增删/换序不应阻断完整业务副本。"""
+        source = {
+            'sheet_count': 2,
+            'sheets': [
+                {'title': '说明', 'index': 0, 'row_count': 5,
+                 'column_count': 8, 'sample': [['说明']]},
+                {'title': 'PD03', 'index': 1, 'row_count': 20,
+                 'column_count': 30, 'sample': [['ASIN', 'SKU', '尺寸',
+                                                   '正常售价', '本周折扣形式',
+                                                   '本周折扣%', '目标成交价']]},
+            ], 'sha256': 'source',
+        }
+        copied = {
+            'sheet_count': 3,
+            'sheets': [
+                {'title': '销售目标汇总', 'index': 0, 'row_count': 10,
+                 'column_count': 12, 'sample': [['ASIN', '目标']]},
+                {'title': 'PD03', 'index': 1, 'row_count': 20,
+                 'column_count': 30, 'sample': [['ASIN', 'SKU', '尺寸',
+                                                   '正常售价', '本周折扣形式',
+                                                   '本周折扣%', '目标成交价']]},
+                {'title': '说明', 'index': 2, 'row_count': 5,
+                 'column_count': 8, 'sample': [['说明']]},
+            ], 'sha256': 'copy',
+        }
+        check = compare_structure_shape(source, copied)
+        self.assertTrue(check['compatible'])
+        self.assertEqual(check['expected_shape_sha256'],
+                         structure_shape_sha256(source))
+        self.assertEqual(check['expected_shape_sha256'],
+                         check['actual_shape_sha256'])
+
     def test_interrupted_initialization_resumes_when_only_content_hash_drifted(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = WeeklyAssetStore(Path(tmp))
