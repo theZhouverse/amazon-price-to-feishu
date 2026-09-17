@@ -6,7 +6,7 @@
 - [x] 新增 `app/main.py::_reconcile_source_fingerprints`：正常新建价格run以本次18表读取为准并记录 `source_fingerprint_drift`；只有显式恢复同一run时才严格拒绝基础字段漂移。指纹绑定run_id和捕获时间写入manifest/bundle，便于审计。
 - [x] 发布前的同run二次读取门禁保持严格；因此不会把抓取阶段的旧价格与本次变化的A:G混用。旧manifest无指纹run_id时仍按当前发布run严格校验。
 - [x] 兼容旧实现“已更新 snapshot_run_id 但尚未生成本地源快照”的中断：该类显式恢复允许首次绑定当前18表指纹；源快照生成后仍按同run严格门禁。
-- [x] 新增跨run接受漂移、同run恢复拒绝漂移回归；完整离线测试 `381/381`、`compileall`、`git diff --check` 通过。修复未执行飞书写入或Amazon抓取。
+- [x] 新增跨run接受漂移、同run恢复拒绝漂移及“精确18个业务子表”回归；完整离线测试 `382/382`、`compileall`、`git diff --check` 通过。修复未执行飞书写入或Amazon抓取。
 - [ ] 需在下一次不并发的正式18表批次中确认：新run能够完成A:G读取、抓取和固定结果表发布；若发布前快照仍持续变化，必须按同run门禁留在恢复清单，不能放宽为静默覆盖。
 
 ## 2026-09-17 周报新增辅助子表与业务列偏移兼容（已完成）
