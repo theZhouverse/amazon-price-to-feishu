@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Amazon Daily 代码模块架构",
+    "locale": "zh-CN",
+    "output": "amazon_daily_architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/theZhouverse/amazon-price-to-feishu.git",
+      "revision": "7c2ce802100c81f89ca691827b1a9a018262d58d"
+    },
+    "views": [
+      {
+        "id": "run-path",
+        "label": "主运行链路",
+        "focus": ["scheduler", "orchestrator", "source_plan", "domain_pricing", "amazon_browser", "result_writer"],
+        "note": "从 Windows 计划任务进入，选择周报快照，抓取并写回固定结果表。"
+      },
+      {
+        "id": "source-boundary",
+        "label": "源数据与快照边界",
+        "focus": ["source_plan", "feishu_adapter", "feishu_cloud", "runtime_artifacts"],
+        "note": "周报登记、云端副本、表头映射和本地证据的边界。"
+      },
+      {
+        "id": "independent-stages",
+        "label": "独立业务阶段",
+        "focus": ["domain_pricing", "amazon_browser", "result_writer", "feedback_pipeline", "ziniao"],
+        "note": "价格抓取、结果发布和 Feedback 分阶段运行，异常通过本地证据隔离。"
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [40, 60],
+    "cols": 5,
+    "gapX": 95,
+    "gapY": 110,
+    "cellW": 175,
+    "cellH": 92
+  },
+  "components": [
+    {
+      "id": "scheduler",
+      "type": "backend",
+      "label": "Windows 调度入口",
+      "sublabel": "app/run.py\n07:30 / 15:30",
+      "tag": "生产入口",
+      "sources": [
+        {"path": "bin/scheduled_run.ps1", "label": "schedule"},
+        {"path": "app/run.py", "label": "CLI"}
+      ],
+      "row": 0,
+      "col": 0,
+      "size": [175, 92]
+    },
+    {
+      "id": "orchestrator",
+      "type": "backend",
+      "label": "运行编排器",
+      "sublabel": "main.py\n阶段门禁与发布",
+      "tag": "orchestration",
+      "sources": [
+        {"path": "app/main.py", "label": "run pipeline"},
+        {"path": "app/weekly_execution.py", "label": "execution"}
+      ],
+      "row": 0,
+      "col": 1,
+      "size": [175, 92]
+    },
+    {
+      "id": "source_plan",
+      "type": "backend",
+      "label": "周报源计划与快照",
+      "sublabel": "周期 / 映射\n18 表",
+      "tag": "source boundary",
+      "sources": [
+        {"path": "app/weekly_execution.py", "label": "period selection"},
+        {"path": "app/weekly_assets.py", "label": "snapshot"},
+        {"path": "app/weekly_mapping.py", "label": "schema mapping"}
+      ],
+      "row": 0,
+      "col": 2,
+      "size": [175, 92]
+    },
+    {
+      "id": "feishu_adapter",
+      "type": "backend",
+      "label": "飞书适配层",
+      "sublabel": "token / sheet IO\n读写与回读",
+      "tag": "adapter",
+      "sources": [
+        {"path": "app/feishu.py", "label": "FeishuClient"},
+        {"path": "app/sheet_io.py", "label": "range IO"},
+        {"path": "app/weekly_registry.py", "label": "registry"}
+      ],
+      "row": 0,
+      "col": 3,
+      "size": [175, 92]
+    },
+    {
+      "id": "domain_pricing",
+      "type": "backend",
+      "label": "领域模型与价格规则",
+      "sublabel": "ReportRow / Decimal\n折扣规则",
+      "tag": "pure logic",
+      "sources": [
+        {"path": "app/models.py", "label": "domain model"},
+        {"path": "app/pricing.py", "label": "pricing"},
+        {"path": "app/frontend_checks.py", "label": "frontend checks"}
+      ],
+      "row": 1,
+      "col": 1,
+      "size": [175, 92]
+    },
+    {
+      "id": "amazon_browser",
+      "type": "backend",
+      "label": "Amazon 浏览器抓取",
+      "sublabel": "串行 Tab / DOM 门禁\nUS + CA",
+      "tag": "online stage",
+      "sources": [
+        {"path": "app/amazon/crawler.py", "label": "browser"},
+        {"path": "app/amazon/parser.py", "label": "crawl"},
+        {"path": "app/product_links.py", "label": "links"}
+      ],
+      "row": 1,
+      "col": 2,
+      "size": [175, 92]
+    },
+    {
+      "id": "result_writer",
+      "type": "backend",
+      "label": "结果表发布",
+      "sublabel": "A:G + H:V\n写后回读 / 门禁",
+      "tag": "delivery",
+      "sources": [
+        {"path": "app/weekly_result.py", "label": "weekly result"},
+        {"path": "app/publication_guard.py", "label": "publish guard"},
+        {"path": "app/result_notification.py", "label": "notifications"}
+      ],
+      "row": 1,
+      "col": 3,
+      "size": [175, 92]
+    },
+    {
+      "id": "feedback_pipeline",
+      "type": "backend",
+      "label": "Feedback 阶段",
+      "sublabel": "两店分页 / 去重\n固定子表",
+      "tag": "independent stage",
+      "sources": [
+        {"path": "app/seller_feedback.py", "label": "pipeline"},
+        {"path": "app/seller_feedback_browser.py", "label": "browser adapter"}
+      ],
+      "row": 1,
+      "col": 4,
+      "size": [175, 92]
+    },
+    {
+      "id": "runtime_artifacts",
+      "type": "database",
+      "label": "运行状态与证据",
+      "sublabel": "cache / logs\nJSON / CSV",
+      "tag": "local durable state",
+      "sources": [
+        {"path": "app/cache.py", "label": "cache"},
+        {"path": "app/runtime_state.py", "label": "state"},
+        {"path": "app/diagnostics.py", "label": "run evidence"}
+      ],
+      "row": 2,
+      "col": 0,
+      "size": [175, 92]
+    },
+    {
+      "id": "feishu_cloud",
+      "type": "external",
+      "label": "飞书云端",
+      "sublabel": "登记表 / 周报副本\n固定结果表",
+      "tag": "external SaaS",
+      "row": 0,
+      "col": 4,
+      "size": [175, 92]
+    },
+    {
+      "id": "amazon",
+      "type": "external",
+      "label": "Amazon 商品页",
+      "sublabel": "US / CA\n价格与 DOM",
+      "tag": "external web",
+      "row": 2,
+      "col": 2,
+      "size": [175, 92]
+    },
+    {
+      "id": "ziniao",
+      "type": "external",
+      "label": "紫鸟 Seller Central",
+      "sublabel": "headless store\nFeedback",
+      "tag": "external bridge",
+      "row": 2,
+      "col": 4,
+      "size": [175, 92]
+    }
+  ],
+  "connections": [
+    {"id": "schedule-run", "from": "scheduler", "to": "orchestrator", "variant": "emphasis"},
+    {"id": "run-source", "from": "orchestrator", "to": "source_plan", "variant": "emphasis"},
+    {"id": "source-feishu", "from": "source_plan", "to": "feishu_adapter"},
+    {"id": "adapter-cloud", "from": "feishu_adapter", "to": "feishu_cloud", "variant": "emphasis"},
+    {"id": "run-domain", "from": "orchestrator", "to": "domain_pricing"},
+    {"id": "domain-browser", "from": "domain_pricing", "to": "amazon_browser", "variant": "emphasis"},
+    {"id": "browser-amazon", "from": "amazon_browser", "to": "amazon"},
+    {"id": "browser-result", "from": "amazon_browser", "to": "result_writer"},
+    {"id": "result-adapter", "from": "result_writer", "to": "feishu_adapter"},
+    {"id": "result-feedback", "from": "result_writer", "to": "feedback_pipeline", "variant": "dashed"},
+    {"id": "feedback-ziniao", "from": "feedback_pipeline", "to": "ziniao", "variant": "dashed"},
+    {"id": "feedback-cloud", "from": "feedback_pipeline", "to": "feishu_cloud"},
+    {"id": "run-state", "from": "orchestrator", "to": "runtime_artifacts", "variant": "dashed"}
+  ],
+  "boundaries": [
+    {"kind": "region", "label": "本地 Windows 宿主机", "wraps": ["scheduler", "orchestrator", "source_plan", "feishu_adapter", "domain_pricing", "amazon_browser", "result_writer", "feedback_pipeline", "runtime_artifacts"]},
+    {"kind": "region", "label": "外部系统边界", "wraps": ["feishu_cloud", "amazon", "ziniao"]}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "模块边界", "items": ["表头映射、价格计算和浏览器抓取分离", "结果发布通过 publication_guard 与写后回读"]},
+    {"dot": "emerald", "title": "数据边界", "items": ["源周报通过 manifest 固化快照", "本地 outputs 保存可审计 bundle、日志和恢复证据"]},
+    {"dot": "amber", "title": "仍需注意", "items": ["feishu.py 同时承载 API 适配与部分源行解析", "main.py 仍是较大的编排入口，后续可继续拆分阶段服务"]}
+  ]
+}
