@@ -1,11 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
-## 2026-09-18 服务器代码预部署（已完成，未启动）
+## 2026-09-18 服务器代码暂存到 D 盘（已完成，未启动）
 
 - 目标服务器 `CHINAMI-UB5FIKT` 通过知识库登记的 Tailscale SSH 通道 `100.74.124.50` 可达；`192.168.108.20` 本次端口连接超时，未改动局域网配置。
-- 预部署内容是当前 Git 提交 `fdc09df0d41209ed232f583d7df6c03bdcef07d3` 的源码归档，远端 SHA256 与本机一致；目标目录 `C:\deploy\apps\amazon_daily_structured_20260821` 原先不存在，因此没有覆盖既有应用。
-- 远端只完成解压和提交标记回读，没有启动项目、Python、Chrome、NSSM、HTML 服务或 Windows 计划任务；当前服务器没有对应运行进程/任务。未迁移 `.env`、`.venv`、输出/快照/浏览器会话，故这不是可运行生产实例。
-- 启动前仍必须按 SPEC 在目标机重新创建 `.venv`、注入 Secret、确认 Chromium/紫鸟和代理、筛选迁移运行数据，并完成离线回归、登记表只读、US/CA 单点和最小写入回读；本次预部署不能替代这些验收。
+- 按 T9 已验证的服务器推送 SOP，当前分支 HEAD `575b5fdf689c38be9a5363caa5b238748a3c601f` 已暂存到唯一目标 `D:\projects\amazon_daily_structured_20260821`。传输 ZIP 校验、远端解压和逐文件 SHA-256 回读均通过：108/108 tracked 文件路径与内容一致，`DEPLOYED_COMMIT.txt` 与 HEAD 一致。
+- 首次 `Expand-Archive` 对 5 个中文文件名发生乱码；没有以目录文件数作为通过条件，而是用 manifest 哈希定位并修复文件名后再次校验，临时传输包已清理。远端存在 `app\main.py` 和 `config\config.json`，没有 `.env`。
+- 远端只完成代码落盘和回读，没有启动项目、Python、Chrome、NSSM、HTML 服务或 Windows 计划任务；D 盘目录不是已上线实例。先前误按通用文档放置的 `C:\deploy\apps\amazon_daily_structured_20260821` 保留但不作为运行来源，后续以 D 盘目录为准。
+- 启动前仍必须按 SPEC 在 D 盘目标机重新创建 `.venv`、注入 Secret、确认 Chromium/紫鸟和代理、筛选迁移运行数据，并完成离线回归、登记表只读、US/CA 单点和最小写入回读；本次暂存不能替代这些验收。
 
 ## 2026-09-17 15:30 手动补跑18表（已完成，结果为partial）
 
