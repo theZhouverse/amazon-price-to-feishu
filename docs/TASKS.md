@@ -1,5 +1,12 @@
 # TASKS: Amazon Daily
 
+## 2026-09-18 服务器代码预部署（已完成，未启动）
+
+- [x] 使用知识库记录的 SSH 密钥通道连接 `CHINAMI-UB5FIKT`（Tailscale `100.74.124.50`）；局域网地址 `192.168.108.20` 本次连接超时，未把超时误判为认证失败。
+- [x] 将 Git HEAD `fdc09df0d41209ed232f583d7df6c03bdcef07d3` 打成单个源码归档并传至服务器 `C:\deploy\backup\amazon_daily_structured_20260918_fdc09df.tar.gz`；本地/远端 SHA256 均为 `0C8CF27C583F1781CF85846144BD5A628AEFE7BEE231F794C6A590C26F2CC6B6`，大小 `1163992` bytes。
+- [x] 仅解压源码至 `C:\deploy\apps\amazon_daily_structured_20260821`，不传 `.git`、`.venv`、`.env`、`outputs`、`htmls`、缓存或运行数据；远端 `app\main.py`、`config\config.json` 回读存在。
+- [x] 远端写入 `DEPLOYED_COMMIT.txt` 作为部署标记；未启动 Python/Chrome，未安装或启用 AmazonDaily 计划任务，未启动 NSSM/HTML 服务。服务器现阶段仅完成代码落盘，等待后续环境、Secret、Chromium/紫鸟会话和运行数据迁移验收。
+
 ## 2026-09-17 15:30 手动补跑18表（已完成，partial）
 
 - [x] 使用正式入口 `.venv\\Scripts\\python.exe app\\main.py --weekly-run --confirm --scheduled-slot weekday_1530 --force-fetch` 启动新运行 `20260917_155600`；来源 `seq-5/weekday_steady`，未启用 HTML 归档，单进程4个互斥 Tab。
