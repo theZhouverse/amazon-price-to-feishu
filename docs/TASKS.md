@@ -3,8 +3,8 @@
 ## 2026-09-18 服务器代码暂存（D 盘目标，已完成，未启动）
 
 - [x] 使用知识库记录的 SSH 密钥通道连接 `CHINAMI-UB5FIKT`（Tailscale `100.74.124.50`）；局域网地址 `192.168.108.20` 本次连接超时，未把超时误判为认证失败。
-- [x] 已按 T9 成功推送 SOP 将当前分支 HEAD `575b5fdf689c38be9a5363caa5b238748a3c601f` 暂存到服务器唯一目标 `D:\projects\amazon_daily_structured_20260821`；只传 Git tracked 源码，不传 `.git`、`.venv`、`.env`、`outputs`、`htmls`、缓存或浏览器运行数据。
-- [x] 采用 ZIP 保留原始字节、远端独立校验和 SHA-256 回读；108/108 个 tracked 文件的路径与内容均一致，`app\main.py`、`config\config.json` 存在，`.env` 不存在。远端标记为 `DEPLOYED_COMMIT.txt=575b5fdf689c38be9a5363caa5b238748a3c601f`。
+- [x] 已按 T9 成功推送 SOP 将源码（初始代码提交 `575b5fdf689c38be9a5363caa5b238748a3c601f`，随后文档修正提交 `2fef9c86cb93d77e356d4b89d958f5dde0446796`）暂存到服务器唯一目标 `D:\projects\amazon_daily_structured_20260821`；只传 Git tracked 源码，不传 `.git`、`.venv`、`.env`、`outputs`、`htmls`、缓存或浏览器运行数据。
+- [x] 采用 ZIP 保留原始字节、远端独立校验和 SHA-256 回读；108/108 个 tracked 文件的路径与内容均一致，`app\main.py`、`config\config.json` 存在，`.env` 不存在。最终远端标记为 `DEPLOYED_COMMIT.txt=2fef9c86cb93d77e356d4b89d958f5dde0446796`。
 - [x] Windows `Expand-Archive` 首次解压造成 5 个中文文件名乱码；已按文件内容哈希精确修复文件名后重新完成 108/108 校验，临时 ZIP/manifest 已清理。
 - [x] 未启动 Python/Chrome，未安装或启用 AmazonDaily 计划任务，未启动 NSSM/HTML 服务；D 盘目前只是代码暂存，等待后续环境、Secret、Chromium/紫鸟会话和运行数据迁移验收。
 - [x] 先前按通用服务器文档误放的 `C:\deploy\apps\amazon_daily_structured_20260821` 保留为未启动的旧预部署副本，不是运行来源；后续服务器操作一律以 D 盘目标为准，未在本次删除该副本。
