@@ -26,7 +26,9 @@ if ($Action -eq '--remove') {
 
 # HTML service and firewall are managed separately; price install/remove must
 # not start, stop, or grant network access for that optional service.
-# Current production schedule: weekdays at 07:30 and 15:30, no expiration.
+# Current production schedule: every day at 07:30 and 15:30, no expiration.
+# Monday keeps the explicit carryover/switch semantics; Tuesday-Sunday use the
+# steady current-period slots, including Saturday and Sunday.
 # Use the GUI-subsystem WScript launcher.  A task that calls a .bat/cmd wrapper
 # can still flash a console before the inner PowerShell -WindowStyle Hidden is
 # applied; wscript.exe avoids creating that console in the first place.
@@ -39,9 +41,9 @@ if ($existingAfternoon -and -not $existingAfternoon.Settings.Enabled) {
 }
 $definitions = @(
     [pscustomobject]@{ Name = 'AmazonDaily_0730'; Days = @('Monday'); Hour = 7; Minute = 30; Slot = 'monday_0730' },
-    [pscustomobject]@{ Name = 'AmazonDaily_0730_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday'); Hour = 7; Minute = 30; Slot = 'weekday_0730' },
+    [pscustomobject]@{ Name = 'AmazonDaily_0730_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'); Hour = 7; Minute = 30; Slot = 'weekday_0730' },
     [pscustomobject]@{ Name = 'AmazonDaily_1530'; Days = @('Monday'); Hour = 15; Minute = 30; Slot = 'monday_1530' },
-    [pscustomobject]@{ Name = 'AmazonDaily_1530_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday'); Hour = 15; Minute = 30; Slot = 'weekday_1530' }
+    [pscustomobject]@{ Name = 'AmazonDaily_1530_weekday'; Days = @('Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'); Hour = 15; Minute = 30; Slot = 'weekday_1530' }
 )
 foreach ($item in $definitions) {
     $taskAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument (

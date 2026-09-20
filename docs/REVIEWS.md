@@ -1,5 +1,12 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-20 周末加入每日双时段（已完成）
+
+- 用户将调度要求改为每天执行两次，包含周六、周日。代码保留周一早间沿用上一周期、周一下午切换最新周期的特殊语义；周二至周日统一走 `weekday_steady`，不会因周末而切换或复制新周报。
+- Windows 任务已重装并回读：`AmazonDaily_0730_weekday`、`AmazonDaily_1530_weekday` 的触发器为周二至周日（DaysOfWeek 位掩码 `125`），两个周一任务仍为周一（`2`）；四条任务均隐藏、启用、Ready，继续通过 `wscript.exe` 启动。
+- `PYTHONPATH=app;tests .venv\Scripts\python.exe -m unittest discover -s tests -q`：`382/382` 通过；`compileall`、`git diff --check` 和调度安装退出码 `0`。本次未启动额外批次。
+- 仍需观察首个自然周末 07:30/15:30 真实批次的写表、Feedback 每日早间窗口、CA 门禁和全员通知；此项属于后续运行证据，不是代码或任务安装阻断。
+
 ## 2026-09-18 服务器代码暂存到 D 盘（已完成，未启动）
 
 - 目标服务器 `CHINAMI-UB5FIKT` 通过知识库登记的 Tailscale SSH 通道 `100.74.124.50` 可达；`192.168.108.20` 本次端口连接超时，未改动局域网配置。

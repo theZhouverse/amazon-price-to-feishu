@@ -88,6 +88,7 @@ class SchedulerPolicyTests(unittest.TestCase):
                 ('AmazonDaily_1530_weekday', 'weekday_1530')):
             self.assertIn(task_name, installer)
             self.assertIn(slot, installer)
+        self.assertIn("'Saturday', 'Sunday'", installer)
         self.assertIn("'--scheduled-slot' $ScheduledSlot", runner)
         self.assertIn('[Console]::OutputEncoding = $utf8', runner)
         self.assertIn("$env:PYTHONUTF8 = '1'", runner)

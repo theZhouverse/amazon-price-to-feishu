@@ -1,5 +1,14 @@
 # TASKS: Amazon Daily
 
+## 2026-09-20 每日双时段扩展至周六日（已完成）
+
+- [x] 按新要求将价格任务从“周一至周五每天两次”改为“周一至周日每天两次”：每天北京时间 `07:30` 和 `15:30` 执行；周一继续使用 `monday_0730`/`monday_1530` 的换周语义，周二至周日使用 `weekday_0730`/`weekday_1530` 的稳态快照语义。
+- [x] 更新 `bin/schedule.ps1`：两个 `*_weekday` 任务的触发日从周二至周五扩展为周二至周日（Windows DaysOfWeek 位掩码回读为 `125`），继续使用 `wscript.exe` → `hidden_ps1.vbs` → 隐藏 PowerShell，不增加可见终端窗口。
+- [x] 同步更新 `README.md`、`docs/README.md`、`docs/SPEC.md`、`app/main.py` 和 `app/weekly_registry.py`：周末稳态读取已固化周期，07:30 Feedback 随每日早间槽位运行，15:30 不重复采集。
+- [x] 离线回归：项目虚拟环境未安装 pytest，改用项目 `PYTHONPATH=app;tests` 的 unittest 入口运行，`382/382` 通过；`compileall` 和 `git diff --check` 通过。
+- [x] 执行 `bin\schedule.bat --install`，退出码 `0`。四条任务均回读 `Ready/Enabled=True/Hidden=True`；`AmazonDaily_0730_weekday` 与 `AmazonDaily_1530_weekday` 周末触发器回读为 `DaysOfWeek=125`，周一专用任务保持 `DaysOfWeek=2`。未启动新的价格批次。
+- [x] 现有 2026-09-20 调休下午批次 `20260920_153530` 不受本次调度改动影响，结果证据保持原路径；本次只修改后续调度规则和对应文档。
+
 ## 2026-09-18 服务器代码暂存（D 盘目标，已完成，未启动）
 
 - [x] 使用知识库记录的 SSH 密钥通道连接 `CHINAMI-UB5FIKT`（Tailscale `100.74.124.50`）；局域网地址 `192.168.108.20` 本次连接超时，未把超时误判为认证失败。

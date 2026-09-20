@@ -1245,7 +1245,7 @@ def _feedback_report_base(status: str, *, reason: str = '') -> dict:
 
 def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
                         *, execution_started_at: datetime | None = None) -> dict:
-    """Run independent Feedback collection only in the weekday 07:30 slot.
+    """Run independent Feedback collection only in the daily 07:30 slot.
 
     ``execution_started_at`` is the wall-clock timestamp captured when the
     parent task began.  It is deliberately passed through to the Feedback

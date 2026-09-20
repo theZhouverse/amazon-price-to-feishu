@@ -240,8 +240,8 @@ def select_for_scheduled_slot(records: list[dict], now: datetime,
     ``StartWhenAvailable`` can launch a Monday task hours late.  The slot is
     therefore an explicit input, not inferred from the process wall clock.
     Monday morning carries the prior fixed period, Monday afternoon requires a
-    newer registry row, and weekday slots keep the prior period while exposing
-    a pending change.
+    newer registry row, and non-Monday steady slots (Tuesday-Sunday) keep the
+    prior period while exposing a pending change.
     """
     slot = str(scheduled_slot or 'manual').strip().lower()
     allowed = {'manual', 'monday_0730', 'monday_1530',
@@ -263,10 +263,11 @@ def select_for_scheduled_slot(records: list[dict], now: datetime,
             raise RuntimeError('周一15:30登记表没有比上一周期更高的有效序号，安全停止')
         return replace(latest, scheduled_slot=slot, selection_mode='monday_switch')
 
-    # Tuesday-Friday must not silently adopt a newly appeared row.  Keep the
-    # ready period and carry an auditable pending change to the manifest/log.
+    # Non-Monday steady slots must not silently adopt a newly appeared row.
+    # Keep the ready period and carry an auditable pending change to the
+    # manifest/log. This also covers weekend catch-up/workday runs.
     if previous is None:
-        raise RuntimeError('工作日稳态任务缺少上一周期固定manifest/period_id，安全停止')
+        raise RuntimeError('稳态任务缺少上一周期固定manifest/period_id，安全停止')
     pending = None
     if latest.period_id != previous.period_id:
         pending = {
