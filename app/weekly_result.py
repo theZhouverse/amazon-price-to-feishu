@@ -13,6 +13,176 @@ from models import PageStatus
 from weekly_assets import WeeklyAssetStore, assert_result_write_target
 from publication_guard import assert_latest_run
 from sheet_io import read_rows
+from weekly_mapping import ASIN_RE, cell_text, find_asin_header, normalize_header
+
+
+def _cell_value(row, column_number):
+    """Return a 1-based column value without changing the source row shape."""
+    if not isinstance(row, list) or column_number < 1 or len(row) < column_number:
+        return ''
+    return row[column_number - 1]
+
+
+def _latest_source_window(fc, spreadsheet: str, sheet_id: str,
+                          last_column: str, row_capacity: int | None,
+                          mapping: dict) -> tuple[list[list], dict]:
+    """Read only the newest top block of a cumulative weekly source sheet.
+
+    Current reports put the newest rows first and retain prior rows below them.
+    The first non-empty value in the existing ``日期`` column is used only as a
+    physical boundary marker; it is not renamed or treated as a new business
+    field.  If that optional marker is absent, the first repeated ASIN is a
+    conservative fallback boundary.  A full read is retained as the final
+    fallback so older layouts remain readable and can be audited.
+    """
+    capacity = int(row_capacity or 0)
+    if capacity <= 0:
+        # Test doubles and legacy metadata without a row capacity cannot be
+        # safely windowed.  Keep the old bounded read, then dedupe below.
+        values = read_rows(fc, spreadsheet, sheet_id, last=last_column,
+                           row_count=row_capacity or mapping.get('row_capacity'))
+        return values, {
+            'mode': 'full_read_no_capacity',
+            'latest_marker': '', 'header_row': None,
+            'boundary_row': None, 'rows_scanned': len(values),
+            'history_rows_skipped': 0,
+        }
+
+    probe = fc.read_values(spreadsheet, sheet_id,
+                           f'A1:{last_column}{min(10, capacity)}')
+    located = find_asin_header(probe)
+    if not located:
+        # Let read_source_rows produce the canonical structural error with the
+        # complete bounded matrix instead of inventing a second error path.
+        values = read_rows(fc, spreadsheet, sheet_id, last=last_column,
+                           row_count=capacity)
+        return values, {
+            'mode': 'full_read_header_fallback',
+            'latest_marker': '', 'header_row': None,
+            'boundary_row': None, 'rows_scanned': len(values),
+            'history_rows_skipped': 0,
+        }
+
+    header_row, asin_col = located
+    header = probe[header_row - 1] if len(probe) >= header_row else []
+    # ``日期`` is an existing source column.  It is deliberately optional:
+    # some older/local fixtures do not have it, and the business contract is
+    # still based on newest-first ASIN rows.
+    date_col = next((i for i, value in enumerate(header, start=1)
+                     if normalize_header(value) in {'日期', 'date', '日期范围'}), None)
+    required_cols = [asin_col]
+    try:
+        from weekly_mapping import resolve_source_columns
+        required_cols.extend(resolve_source_columns(header, require_all=True).values())
+    except RuntimeError:
+        # Preserve the normal parser's structural error below.
+        pass
+    if date_col:
+        required_cols.append(date_col)
+    first_col = min(required_cols)
+    last_col_num = max(required_cols)
+    span_first = col_letter(first_col)
+    span_last = col_letter(last_col_num)
+    width = last_col_num - first_col + 1
+    step = min(500, max(1, 10000 // max(1, width)))
+    data_start = header_row + 1
+    rows: list[list] = []
+    latest_marker = ''
+    boundary_row = None
+    seen_asins: set[str] = set()
+    used_date_boundary = bool(date_col)
+    current = data_start
+    while current <= capacity:
+        stop = min(capacity, current + step - 1)
+        chunk = fc.read_values(spreadsheet, sheet_id,
+                               f'{span_first}{current}:{span_last}{stop}')
+        for offset in range(stop - current + 1):
+            raw = chunk[offset] if offset < len(chunk) else []
+            expanded = [''] * last_col_num
+            if isinstance(raw, list):
+                for index, value in enumerate(raw[:width], start=first_col - 1):
+                    expanded[index] = value
+            row_number = current + offset
+            marker = cell_text(_cell_value(expanded, date_col)).strip() if date_col else ''
+            if marker:
+                if not latest_marker:
+                    latest_marker = marker
+                elif marker != latest_marker:
+                    boundary_row = row_number
+                    break
+            asin_text = cell_text(_cell_value(expanded, asin_col)).upper()
+            asin_match = ASIN_RE.search(asin_text)
+            if asin_match:
+                # This fallback is only active when no usable date marker was
+                # found.  With 日期 present, duplicate ASINs in the newest
+                # block are retained for the explicit first-row policy below.
+                if not date_col and asin_match.group(1).upper() in seen_asins:
+                    boundary_row = row_number
+                    used_date_boundary = False
+                    break
+                seen_asins.add(asin_match.group(1).upper())
+            rows.append(expanded)
+        if boundary_row is not None or stop >= capacity:
+            break
+        current = stop + 1
+
+    if not rows or not any(
+            ASIN_RE.search(cell_text(_cell_value(row, asin_col)).upper())
+            for row in rows) or (date_col and not latest_marker):
+        # No usable marker was found; do one bounded read and let the parser
+        # retain only first ASIN occurrences.  This is rare and auditable.
+        values = read_rows(fc, spreadsheet, sheet_id, last=last_column,
+                           row_count=capacity)
+        return values, {
+            'mode': 'full_read_no_marker',
+            'latest_marker': '', 'header_row': header_row,
+            'boundary_row': None, 'rows_scanned': len(values),
+            'history_rows_skipped': 0,
+        }
+
+    values = [list(row) for row in probe[:header_row - 1]]
+    values.append(list(header))
+    values.extend(rows)
+    boundary = boundary_row or (data_start + len(rows))
+    return values, {
+        'mode': 'date_boundary' if used_date_boundary else 'asin_repeat_boundary',
+        'latest_marker': latest_marker,
+        'header_row': header_row,
+        'boundary_row': boundary_row,
+        'rows_scanned': len(rows),
+        'history_rows_skipped': max(0, capacity - boundary + 1) if boundary_row else 0,
+    }
+
+
+def _select_first_asin_rows(rows: list, invalid: list[dict]) -> tuple[list, list[dict], dict]:
+    """Keep the first (newest) row for each ASIN and audit older repeats."""
+    candidates = []
+    for row in rows:
+        candidates.append((row.row_num, row.asin, 'valid', row))
+    for item in invalid:
+        report_row = item.get('report_row')
+        if report_row is not None:
+            candidates.append((report_row.row_num, report_row.asin, 'invalid', item))
+    candidates.sort(key=lambda item: item[0])
+    seen = set()
+    selected_rows, selected_invalid, historical = [], [], []
+    for row_num, asin, kind, payload in candidates:
+        key = str(asin or '').strip().upper()
+        if not key or key in seen:
+            if key:
+                historical.append({'asin': key, 'row_num': row_num,
+                                   'reason': 'older_duplicate_row'})
+            continue
+        seen.add(key)
+        if kind == 'valid':
+            selected_rows.append(payload)
+        else:
+            selected_invalid.append(payload)
+    return selected_rows, selected_invalid, {
+        'selected_asin_count': len(seen),
+        'historical_duplicate_count': len(historical),
+        'historical_duplicates': historical[:200],
+    }
 
 
 LEGACY_PRICE_RESULT_HEADERS = COMPACT_BASE_HEADERS + [
@@ -66,27 +236,26 @@ def _read_source_plan(fc, snapshot_token: str, mappings: list[dict], cfg: dict) 
             if find_asin_header(probe):
                 raise RuntimeError(f'[{title}] 空表映射已变化，请重新创建批次快照')
             rows, invalid = [], []
+            read_meta = {
+                'mode': 'mapped_empty', 'latest_marker': '',
+                'header_row': None, 'boundary_row': None,
+                'rows_scanned': 0, 'history_rows_skipped': 0,
+            }
         else:
-            values = read_rows(fc, snapshot_token, actual_id,
-                last=last_column,
-                row_count=(info.get('grid_properties') or {}).get('row_count') or mapping.get('row_capacity'))
+            row_capacity = ((info.get('grid_properties') or {}).get('row_count')
+                            or mapping.get('row_capacity'))
+            values, read_meta = _latest_source_window(
+                fc, snapshot_token, actual_id, last_column, row_capacity, mapping)
             rows, invalid = read_source_rows(values, {**cfg, 'source_marketplace': mapping.get('marketplace') or 'US'})
 
+        rows, invalid, selection_meta = _select_first_asin_rows(rows, invalid)
         all_rows = list(rows) + [item['report_row'] for item in invalid]
         all_rows.sort(key=lambda row: row.row_num)
-        seen = {}
-        duplicates = []
-        for row in all_rows:
-            if row.asin in seen:
-                duplicates.append(f'{row.asin}(rows {seen[row.asin]},{row.row_num})')
-            else:
-                seen[row.asin] = row.row_num
-        if duplicates:
-            raise RuntimeError(f'[{title}] 重复 ASIN，禁止初始化结果表: {", ".join(duplicates)}')
         plans.append({
             'mapping': mapping, 'rows': all_rows, 'valid_rows': rows,
             'invalid': invalid, 'invalid_count': len(invalid),
             'values': [_base_values(row) for row in all_rows],
+            'source_read': {**read_meta, **selection_meta},
         })
     return plans
 

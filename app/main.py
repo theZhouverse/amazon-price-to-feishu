@@ -1450,6 +1450,21 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not selected:
         raise RuntimeError('请求的子表不在本周 manifest 映射中')
     plans = _read_source_plan(fc, manifest['snapshot']['spreadsheet_token'], selected, cfg)
+    # Persist the cumulative-source read decision before Amazon work starts.
+    # This makes the latest-row boundary and excluded historical rows auditable
+    # without putting the full historical source matrix into the run bundle.
+    atomic_json(
+        store.root / selection.period_id / 'runs' / f'{run_id}_source_read.json',
+        {
+            'run_id': run_id,
+            'period_id': selection.period_id,
+            'snapshot_spreadsheet_token': manifest['snapshot']['spreadsheet_token'],
+            'sheets': {
+                plan['mapping']['result_sheet']: plan.get('source_read') or {}
+                for plan in plans
+            },
+        },
+    )
     fingerprints = {p['mapping']['result_sheet']: base_fingerprint(p) for p in plans}
     recovery_requested = bool(getattr(args, 'resume', False) or
                               getattr(args, 'run_id', None))

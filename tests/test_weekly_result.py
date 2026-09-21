@@ -1,4 +1,5 @@
 import sys
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 
 from weekly_assets import WeeklyAssetStore
-from weekly_result import RESULT_HEADERS, sync_weekly_result_base
+from weekly_result import (RESULT_HEADERS, _latest_source_window,
+                           _select_first_asin_rows, sync_weekly_result_base)
 
 
 CFG = {
@@ -73,6 +75,29 @@ class FakeFeishu:
             self.base_values[sid] = values
 
 
+class RangeFeishu:
+    """Small range-aware source client for latest-block reader tests."""
+    def __init__(self, values):
+        self.values = values
+
+    @staticmethod
+    def col_num(value):
+        number = 0
+        for letter in value:
+            number = number * 26 + ord(letter.upper()) - 64
+        return number
+
+    def read_values(self, _token, _sid, rng):
+        match = re.fullmatch(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', rng)
+        self_start, self_row, self_end, end_row = match.groups()
+        start_col = self.col_num(self_start)
+        end_col = self.col_num(self_end)
+        start_row = int(self_row)
+        end_row = int(end_row)
+        return [list(row[start_col - 1:end_col])
+                for row in self.values[start_row - 1:end_row]]
+
+
 class WeeklyResultTest(unittest.TestCase):
     def test_base_non_asin_corruption_is_rejected(self):
         fc = FakeFeishu({'s1': source(row('B000000001')), 's2': []})
@@ -130,12 +155,39 @@ class WeeklyResultTest(unittest.TestCase):
         self.assertEqual(fc.asins['r1'], ['B000000001'])
         self.assertTrue(any(rng.startswith('A3:V') for _, rng, _ in fc.writes))
 
-    def test_duplicate_asin_blocks_before_any_write(self):
+    def test_historical_duplicate_asin_keeps_newest_row(self):
         fc = FakeFeishu({'s1': source(row('B000000001'), row('B000000001')), 's2': []})
-        with self.assertRaisesRegex(RuntimeError, '重复 ASIN'):
-            self.run_sync(fc)
-        self.assertEqual(fc.writes, [])
-        self.assertEqual(fc.result_sheets, {})
+        result, _ = self.run_sync(fc)
+        self.assertEqual(result['row_count'], 1)
+        self.assertEqual(fc.asins['r1'], ['B000000001'])
+        self.assertEqual(fc.base_values['r1'][0][0], 'B000000001')
+
+    def test_latest_source_window_stops_at_date_change(self):
+        values = [
+            ['说明'],
+            ['日期', 'ASIN', 'SKU', '颜色', '尺寸', '正常售价',
+             '上周折扣形式', '上周折扣%', '本周折扣形式', '本周折扣%',
+             '广告策略', '目标成交价'],
+            ['9.13-9.19', 'B000000001', 'SKU-1', '', "5'X7'", 20,
+             '', '', '价格折扣', '10%', '', 18],
+            ['9.13-9.19', 'B000000002', 'SKU-2', '', "6'X9'", 30,
+             '', '', '价格折扣', '10%', '', 27],
+            ['', '', '', '', '', '', '', '', '', '', '', ''],
+            ['9.6-9.12', 'B000000001', 'SKU-1-old', '', "5'X7'", 19,
+             '', '', '价格折扣', '10%', '', 17],
+        ]
+        fc = RangeFeishu(values)
+        window, meta = _latest_source_window(
+            fc, 'snapshot', 's1', 'L', len(values), {})
+        self.assertEqual(meta['mode'], 'date_boundary')
+        self.assertEqual(meta['latest_marker'], '9.13-9.19')
+        self.assertEqual(meta['boundary_row'], 6)
+        from feishu import read_source_rows
+        rows, invalid = read_source_rows(window, CFG)
+        rows, invalid, selection = _select_first_asin_rows(rows, invalid)
+        self.assertEqual([row.asin for row in rows],
+                         ['B000000001', 'B000000002'])
+        self.assertEqual(selection['historical_duplicate_count'], 0)
 
     def test_missing_or_drifted_source_sheet_blocks(self):
         manifest = self.manifest()
