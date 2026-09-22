@@ -1,5 +1,53 @@
 # TASKS: Amazon Daily
 
+## 2026-09-22 价格前端与Feedback调度拆分（代码已实现，服务器部署待当前批次结束）
+
+- [x] 正式价格入口新增`--price-only`；服务器四个07:30/15:30计划任务通过`bin\scheduled_run.ps1`显式传入该参数，并在子进程设置`AMAZON_FEEDBACK_ENABLED=false`，确保计划任务不打开紫鸟、不读取或写入Feedback子表。
+- [x] 新增独立手动入口`app\main.py --feedback-only --confirm`（`--dry-run`可做只读验证）：只运行Feedback采集，不读取周报、不抓Amazon价格、不写价格结果表；仍复用全局运行锁和既有店铺home-first/立即关闭策略。
+- [x] 价格任务bundle/manifest将Feedback状态记为`skipped_price_only`并保存原因，不再把“未采集Feedback”误报为运行失败。
+- [x] 更新SPEC、操作入口与调度验收规则；当前运行中的服务器15:30批次不停止、不重启，避免在Python进程使用代码时覆盖生产目录。
+- [ ] 当前服务器15:30批次完成后，将本次提交版本暂存/逐文件校验到服务器`D:\projects\amazon_daily_structured_20260821`；随后确认服务器07:30任务已启用、仅价格运行，并保持本地07:30任务停用，避免双机重复抓取。
+- [ ] 明天早晨不自动运行Feedback；人工执行`--feedback-only --confirm`后，分别核对`outputs/daily_runs/<日期>/*_feedback_summary.json`、`outputs/feedback/<run_id>/`与固定Feedback子表写后回读。
+
+
+## 2026-09-22 下午运行切换到服务器（代码已同步，运行前置未完成）
+
+- [x] 按知识库登记的 SSH 通道核对服务器：`CHINAMI-UB5FIKT` / Tailscale `100.74.124.50`，唯一运行目标为 `D:\projects\amazon_daily_structured_20260821`；不使用旧的 `C:\deploy\apps` 路径。
+- [x] 先暂停本机下午两个任务：`AmazonDaily_1530`、`AmazonDaily_1530_weekday` 均已回读为 `Disabled`；`AmazonDaily_0730`、`AmazonDaily_0730_weekday` 保持原状态。
+- [x] 服务器原先为 `436e541`，与本地当前已提交 `HEAD=463a79e` 不一致；已仅将已提交 `463a79e` 的 108 个 tracked 文件同步到服务器 D 盘，未把本地 19 个未提交 Feedback/文档改动混入服务器；服务器 `DEPLOYED_COMMIT.txt` 已更新为 `463a79e3601720f55ca92f51debf0d950cfffccf`。
+- [x] 远端应用/脚本的 103 个 ASCII 路径逐文件 SHA-256 与提交树一致；Unicode 文档路径按目标路径和文件数复核。临时 ZIP、manifest、stage、`__pycache__` 和运行锁已清理；项目 `.venv` 已在服务器创建并按 `config/requirements.txt` 安装（独立于 tracked 源码树）。
+- [x] 服务器已注册隐藏的下午任务 `AmazonDaily_1530`（`monday_1530`）和 `AmazonDaily_1530_weekday`（`weekday_1530`），入口为 `wscript.exe` → `bin\hidden_ps1.vbs` → `bin\scheduled_run.ps1`；两条任务当前均保持 `Disabled`，未启动业务。
+- [ ] 服务器尚未具备下午生产运行条件：没有项目 `.env`、可解析的 `ziniao-cli` 或已验证的飞书/代理运行环境；不得在这些条件未补齐前手动启动价格任务，也不得重新启用本机下午任务。
+- [ ] 后续启动前必须由服务器侧安全注入 `FS_APP_SECRET`/飞书凭证、确认 `AMAZON_PROXY` 或已验证出口、完成 Chrome/紫鸟会话和运行时验收，再创建隐藏的服务器下午任务；Secret 不通过聊天、代码或传输包复制。
+
+## 2026-09-22 跨项目紫鸟上下文协调（新增，待实现）
+
+- [ ] 在价格任务和 Feedback 任务进入浏览器前取得公共锁 `D:\projects\.runtime\ziniao_sellercentral.lock`，释放顺序固定为业务页退出→店铺关闭→项目锁→公共锁。
+- [ ] 将 `project/run_id/store_id/target_url/egress_status/home_status/risk_status/close_status` 写入运行 manifest/log；严禁记录 Cookie、OTP、Secret、Authorization 和完整代理凭证。
+- [ ] 统一首页门禁与风险状态；网络错误（如 `ERR_SOCKS_CONNECTION_FAILED`）归类为 `ZINIAO_PROXY_UNREACHABLE`，不误报 MFA；MFA/验证码/身份错配保持 fail-closed。
+- [ ] 增加跨项目并发负向测试和“人工 MFA 后必须重新 home-first”测试；公共锁未完成前不标记生产级无人值守交付。
+
+## 2026-09-22 Feedback店铺读取后立即释放浏览器上下文（本轮）
+
+- [x] 确认采集器原有 `finally` 已按店铺关闭上下文；本轮将要求固化为“单店铺最后一页/详情读取完立即 `store close`”，不等待另一店铺或整轮任务结束。
+- [x] 新增 `browser_context_closed`、`browser_release_policy=close_immediately_after_store`、`browser_close_error` 证据；异常和有界重试同样先关闭当前上下文，关闭失败不继续下一个店铺。
+- [x] 增加关闭失败回归测试；不使用操作系统级强杀，避免误伤紫鸟其他店铺。定向与全量离线回归需在本轮修改后重新通过。
+
+## 2026-09-22 Feedback北蓉首页优先导航门禁（本轮）
+
+- [x] 定位北蓉容易读取到残留页面的流程漏洞：旧采集器在 `store open --headless` 后直接访问 Feedback，订单详情返回也直接复用旧 Feedback 上下文，没有强制经过 Seller Central 首页。
+- [x] `seller_feedback_browser.py` 新增 `home_url`（默认 `https://sellercentral.amazon.com/home`）校验；每个店铺打开后固定执行“首页导航→`page content` URL/网络/认证回读→Feedback导航→Feedback路由回读”，首页未通过不得读取【最新反馈】。
+- [x] 详情返回同样先回首页再回 Feedback，并重新恢复页码；禁止将残留的 Feedback/订单详情 DOM 当作当前页。结果证据新增 `home_url`、`home_navigation_count`、`navigation_policy=home_first`。
+- [x] 生产配置和示例配置为冬豚、北蓉登记首页地址；网络/首页路由临时异常仍沿用一次有界重试，验证码、风控、权限、身份不一致和页面结构错误继续安全停止。
+- [x] 新增首页 URL 校验、首页优先顺序、残留 Feedback 路由拒绝回归；完成定向和全量离线测试后，再安排北蓉只读实测。未在本轮自动写入飞书、未启动生产任务、未提交或推送 GitHub。
+
+## 2026-09-22 Feedback首页网络不可达探针与有限恢复（本轮）
+
+- [x] 使用紫鸟官方 CLI 只读复现：两个店铺的 `page visit` CLI 返回成功标记后，`page content --content-format text` 实际落到 `chrome-error://chromewebdata/`，页面提示 `This site can’t be reached` / `ERR_SOCKS_CONNECTION_FAILED`；根因是店铺代理/SOCKS连接失败，不是 Feedback URL 拼写或表头问题。
+- [x] `seller_feedback_browser.py` 在每次 Feedback 首页导航、翻页和详情返回后增加页面可达性回读；明确识别 Chrome 网络错误页并保存脱敏的 URL、标题、错误文本，避免把网络不可达误判为“最新反馈标记缺失”。
+- [x] 扩展已有默认一次的有限恢复：网络/Bridge临时不可达与登录重定向统一在关闭当前 headless 店铺上下文后重新打开；验证码、风控、权限、身份不一致和页面结构错误不重试。运行证据同时记录兼容字段 `auth_retry_*` 和 `transient_retry_*`。
+- [x] 新增首页网络不可达与恢复回归；后续真实运行若仍为 `ERR_SOCKS_CONNECTION_FAILED`，只标记对应店铺 `blocked` 并继续另一店铺，不能把失败伪装成空反馈或推进状态。
+
 ## 2026-09-21 累计周报最新 ASIN 读取修复（代码已修复，正式补跑待执行）
 
 - [x] 定位 2026-09-21 15:30 `monday_switch / seq-6` 失败根因：`PD03` 等子表已经累计多周数据，旧 `_read_source_plan` 将历史重复 ASIN 当成同批重复并在写入前阻断；本轮未进入 Amazon 抓取或结果表写入。

@@ -1,6 +1,6 @@
 # SPEC：Amazon 周报前端价格捕捉任务
 
-> 当前规格，更新于2026-09-15。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
+> 当前规格，更新于2026-09-22。只维护本文件这一套业务口径。实现差距必须明确记录在[REVIEWS](REVIEWS.md)，测试与历史证据在[TASKS](TASKS.md)；不得把规格要求当作已经通过真实验收。
 >
 > 旧版已完整保存到[历史目录](history/README.md)，其中“每周新建结果表”“HTML门禁”“仅下午执行”“8月31日截止”不再是当前规则。
 
@@ -8,9 +8,9 @@
 
 每周一至周日北京时间07:30、15:30执行价格任务，每天两次、无截止日期，周末也执行。不依赖GPT界面；依赖Windows开机、交互账号登录和可用网络。换周不是两个时段都立即切换：周一07:30为“上周延续批次”，必须读取上一周已经固化的周报快照；周一15:30为“本周切换批次”，才读取固定登记表中的最新有效周报并建立新的快照。周二至周日两个时段沿用周一15:30已经确认的本周周期，除非人工明确执行换周维护。
 
-固定链接登记表仍是周报来源控制面，但“登记表最新链接”和“本时段应使用的来源周期”不是同一个概念。周一07:30可以只读检查登记表，却不得因为登记表已经出现本周新链接而提前切换；周一15:30必须重新读取并验证最新有效链接，若没有比上一周期更高的有效序号则安全停止并通知周成业，不得静默继续使用上一周。每个正式来源周期建立一个只读完整快照，重新发现业务子表、提取A:G、抓取Amazon实时价格并完成前端检查，同时从两个店铺的Seller Central Feedback管理器读取评级小于等于三星的feedback，最后写入同一个固定结果Spreadsheet及其固定Feedback子表。固定的是字段位置和结果链接，不是A:G的数据。周一早间的`monday_carryover`、周二至周日的`weekday_steady`必须复用该周期已经确认的物理快照；每天新生成的价格`run_id`只标识本次抓取、缓存和发布，不得触发新的Drive复制。仅周一15:30换周或明确恢复当前run_id时才允许进入对应的快照初始化/恢复路径，禁止混用新基础数据和旧价格。
+固定链接登记表仍是周报来源控制面，但“登记表最新链接”和“本时段应使用的来源周期”不是同一个概念。周一07:30可以只读检查登记表，却不得因为登记表已经出现本周新链接而提前切换；周一15:30必须重新读取并验证最新有效链接，若没有比上一周期更高的有效序号则安全停止并通知周成业，不得静默继续使用上一周。每个正式来源周期建立一个只读完整快照，重新发现业务子表、提取A:G、抓取Amazon实时价格并完成前端检查，最后写入同一个固定结果Spreadsheet；Feedback目标子表仍固定在同一结果Spreadsheet中，但不再由价格任务隐式采集。固定的是字段位置和结果链接，不是A:G的数据。周一早间的`monday_carryover`、周二至周日的`weekday_steady`必须复用该周期已经确认的物理快照；每天新生成的价格`run_id`只标识本次抓取、缓存和发布，不得触发新的Drive复制。仅周一15:30换周或明确恢复当前run_id时才允许进入对应的快照初始化/恢复路径，禁止混用新基础数据和旧价格。
 
-Feedback是独立的每日早间子任务：周一至周日北京时间07:30运行，周末也随价格任务执行；价格任务仍按本SPEC既定的07:30和15:30节奏执行。Feedback不能因为价格任务在15:30运行而重复采集，不能另启一套绕过统一运行锁的并发写回任务。
+价格前端任务与Feedback完全分离：服务器上的07:30/15:30计划任务固定执行`--weekly-run --price-only`，只读取周报、抓取价格和前端检查，不打开紫鸟Feedback店铺、不读写Feedback子表；计划任务同时设置`AMAZON_FEEDBACK_ENABLED=false`作为第二道保护。Feedback改为手动入口`app\main.py --feedback-only --confirm`（测试可加`--dry-run`），该入口只运行两个Seller Central店铺的Feedback采集，不读取周报、不抓取商品、不写价格结果表，并复用统一运行锁。当前部署中明天早上的Feedback自动步骤保持暂停，待人工明确执行上述手动入口后再恢复；不得把手动Feedback伪装成定时槽位，也不得与服务器价格任务并发写同一子表。
 
 价格任务与HTML独立：正式 `--weekly-run` 和 `--weekly-push-only` 强制关闭HTML捕获、HTML必需门禁和HTML服务依赖；默认配置、实际配置及模板均关闭归档与服务。既有HTML只读留存，不清理、不改名、不提交Git；8765服务和自启动任务停用。代码与手工脚本保留，日后如要恢复必须作为独立功能重新验收。禁止使用旧HTML替代实时价格。
 
@@ -20,7 +20,7 @@ Feedback是独立的每日早间子任务：周一至周日北京时间07:30运�
 
 ```mermaid
 flowchart TD
-    A[每天07:30和15:30或人工启动] --> A1{取得统一进程运行锁?}
+    A[服务器每天07:30和15:30价格任务] --> A1{取得统一进程运行锁?}
     A1 -- 否 --> A2[退出码75；不抓取、不写飞书]
     A1 -- 是 --> B[读取固定周报链接登记表]
     B --> B1s{当前是否周一07:30?}
@@ -66,9 +66,11 @@ flowchart TD
     O --> P[清理旧尾行；未知布局停止；登记本批新建表以支持空表恢复]
     O --> Q[写后回读核对；记录成功与阻断]
     P --> Q
-    M --> FB0{当前为Feedback每日07:30槽位?}
-    FB0 -- 否 --> R
-    FB0 -- 是 --> FB[以store open --headless进入店铺A当前紫鸟会话；不弹窗、不抢占前台]
+    M --> FB0[--price-only：跳过Feedback；不打开紫鸟店铺]
+    FB0 --> R
+    MB[人工执行 --feedback-only --confirm] --> MB1{取得统一进程运行锁?}
+    MB1 -- 否 --> MBX[退出码75；不读取、不写Feedback]
+    MB1 -- 是 --> FB[以store open --headless进入店铺A当前紫鸟会话；不弹窗、不抢占前台]
     FB --> FB1[在最新反馈区域按日期窗口读取；仅保留评级<=3]
     FB1 --> FB2[点击每条合格反馈的订单编号进入二级详情，读取订单商品编号、ASIN、SKU]
     FB2 --> FB3[确认当前页下一个按钮及页面身份后继续店铺A分页]
@@ -121,7 +123,7 @@ Windows、Python 3.10+、Chromium/DrissionPage。Python依赖以 `config/require
 - 历史`htmls/`和诊断HTML只用于前端检查的离线样本、选择器和证据定位匹配；不得把历史HTML当作当前运行页面，也不得用历史HTML直接生成本批N:T结果。
 - Feedback任务需要两个店铺的非敏感标识、各自Seller Central反馈管理器URL、凭证引用、固定目标子表身份和页面节奏配置；反馈管理器URL必须明确指向后台【反馈管理器】页面，不得改用商品Review、Q&A或前台评论页面。凭证引用只保存在本机Secret配置，店铺标识、脱敏来源URL和目标Sheet ID写入manifest用于审计。
 - Feedback窗口与留存配置固定为：首次成功运行回看最近7个自然日；后续成功运行回看当前运行时间往前3个自然日；结果表按反馈日期仅保留最近10个自然日。窗口日期统一使用`Asia/Shanghai`，首次窗口只有在两个店铺都完成到达窗口边界或明确记录了安全终止原因后才推进为后续3日窗口；部分失败不得把未完成的首次7日窗口伪装成增量窗口。
-- Feedback调度固定为周一至周日07:30（`Asia/Shanghai`），建议复用现有07:30工作进程和统一运行锁；不得创建与价格07:30任务互相并发写同一子表的第二套无锁任务。手工运行必须显式标记为`manual`，不得伪装成定时槽位。
+- Feedback不再挂在价格调度链路中。服务器四个价格计划任务均以`--price-only`运行，早间不自动打开紫鸟或写Feedback；当前部署先暂停明天早上的Feedback自动步骤。人工需要采集时使用`app\main.py --feedback-only --confirm`，测试可追加`--dry-run`，该入口必须取得统一运行锁、按`home-first`读取两个店铺并在完成后写回固定Feedback子表。手工运行必须显式标记为`manual`，不得伪装成定时槽位，也不得与价格任务并发写同一子表。
 - `outputs/weekly_runs/fixed_result.json` 是固定云端资源身份登记，不是重复的配置来源；部署迁移必须保留。
 - `weekly_registry_max_age_days` 默认8天：正式新批次按本机持久化的首次发现时间阻止长期沿用旧登记链接；只读检查和明确恢复既有run_id不改此账本。
 
@@ -236,11 +238,17 @@ ReportRow记录源行、ASIN、基础字段、目标价来源和前端检查预�
 
 来源路径必须是每个店铺配置的Amazon Seller Central【反馈管理器】页面；目标区域是页面中的【最新反馈】。按页面显示顺序读取当前日期窗口，点击可见且身份明确的【下一个】按钮翻页；每次点击后必须确认页面内容或分页状态发生变化，按钮禁用/消失且已覆盖窗口边界时才停止。不得盲点固定次数，不得把旧DOM当作新页，也不得在页面没有变化时连续点击。
 
+### 6.2.1 北蓉及所有店铺的首页优先导航门禁
+
+每次打开一个紫鸟店铺上下文后，必须先导航到该店配置的 `home_url`（默认 `https://sellercentral.amazon.com/home`），等待页面稳定，并用 `page content` 回读当前 URL、标题和网络错误信息；只有回读 URL 确认仍在 Seller Central 根路径或 `/home`、且没有登录页、验证码、风控或 Chrome 网络错误时，才允许进入 `feedback_manager_url`。禁止直接复用 `store open` 后的残留页、上一次 Feedback 页或订单详情页。订单详情返回列表时也必须重新走“Seller Central 首页 → Feedback 管理器”顺序，再按页码恢复，并重新验证页面路由和店铺上下文。每次采集证据记录 `home_url`、`home_navigation_count` 和 `navigation_policy=home_first`；首页回读缺少 URL、落到非首页或 Feedback 导航未完成均立即停止当前店铺，关闭上下文，并按一次有界会话恢复规则重开，不得用旧页面继续读取。该门禁对北蓉（`store_b`）特别适用，但不因店铺不同而放宽其他店铺的顺序。
+
+一个店铺的最后一页和所有需要的订单详情读取完成后，必须立即调用官方 CLI 的 `store close` 释放该店铺浏览器上下文，再开始另一个店铺；不能把已完成的店铺上下文留到整轮结束。异常、登录页、网络错误或重试前也必须先关闭当前上下文。运行证据记录 `browser_context_closed`、`browser_release_policy=close_immediately_after_store` 和 `browser_close_error`；关闭失败不得标记为已释放，也不得继续下一个店铺。这里使用紫鸟官方关闭接口，不通过操作系统强杀共享浏览器进程，避免影响其他紫鸟店铺。
+
 首次运行在本地没有`feedback_state.json`的有效成功检查点时，读取运行时间往前7个自然日；后续只有在上一次窗口状态为可推进时，读取运行时间往前3个自然日。窗口内每条评级小于等于3的反馈都必须尝试点击订单编号进入二级界面，读取订单商品编号、ASIN和SKU，并校验二级页面仍属于该订单。二级页面读取失败时不得猜测或填充其他订单的字段；为避免丢失反馈，主反馈字段可先写入、三级详情字段留空，并在本地记录`partial`及可重试原因，下一次3日重叠窗口优先重试，未完成的详情不计入该条完整成功。
 
 每次发布前按反馈日期删除结果表中早于`运行时间 - 10个自然日`的记录，先备份目标子表、再写入合并后的两店结果、最后按9列整表回读。日期缺失或无法解释的记录不能静默归入10日窗口，保存到本地异常证据并标记阻断。源端当前页暂时没有返回的历史反馈不自动删除，只有本地10日留存门禁或明确的业务保留期限才允许清理。
 
-Feedback任务独立记录`ok`、`partial`、`blocked`和`auth_error`。一个店铺遇到登录页时先停止当前上下文并关闭它，最多按`auth_retry_attempts`（默认1次）重新以`store open --headless`建立该店铺上下文，等待`auth_retry_wait_min`～`auth_retry_wait_max`（默认5～10秒）后重新导航；每次重试都必须记录次数、随机等待和原因。重试后仍为登录页才将该店铺标记`auth_error`，再按独立会话继续另一店铺。验证码、风控、权限、页面结构异常、翻页无变化或二级订单身份不一致不是可重试登录跳转，必须立即停止该店铺并保存页码/URL/原因证据，不连续重试轰炸。两个店铺均成功但窗口内没有评级小于等于3的记录时，写入零条新增结果并记录“无符合条件数据”，不能把空结果当作接口失败。目标表不可见的内部状态、幂等键、页码、来源URL、失败原因、`run_id`和规则版本全部保存在`outputs/feedback/{run_id}/`，不扩展用户要求的9列表头。Feedback可见固定表头顺序必须为`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`；订单商品编号/ASIN/SKU紧跟订单编号，评论列位于详情字段之后。任何迁移先备份整表，再按A:I写入并整表回读，表头不匹配时禁止猜测覆盖。
+Feedback任务独立记录`ok`、`partial`、`blocked`和`auth_error`。每次`page visit`后必须通过`page content`回读页面URL/标题/错误页信息，确认没有落入`chrome-error://`或`This site can't be reached`等浏览器网络错误页，再读取【最新反馈】DOM；紫鸟CLI返回“导航成功”不能替代页面可达性回读。一个店铺遇到登录页或临时首页网络/Bridge不可达时先停止当前上下文并关闭它，最多按`auth_retry_attempts`（默认1次）重新以`store open --headless`建立该店铺上下文，等待`auth_retry_wait_min`～`auth_retry_wait_max`（默认5～10秒）后重新导航；每次重试都必须记录次数、随机等待和原因。重试后仍为登录页才将该店铺标记`auth_error`，仍为网络不可达则标记`blocked`，再按独立会话继续另一店铺。验证码、风控、权限、页面结构异常、翻页无变化或二级订单身份不一致不是可重试登录跳转，必须立即停止该店铺并保存页码/URL/原因证据，不连续重试轰炸。两个店铺均成功但窗口内没有评级小于等于3的记录时，写入零条新增结果并记录“无符合条件数据”，不能把空结果当作接口失败。目标表不可见的内部状态、幂等键、页码、来源URL、失败原因、`run_id`和规则版本全部保存在`outputs/feedback/{run_id}/`，不扩展用户要求的9列表头。Feedback可见固定表头顺序必须为`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`；订单商品编号/ASIN/SKU紧跟订单编号，评论列位于详情字段之后。任何迁移先备份整表，再按A:I写入并整表回读，表头不匹配时禁止猜测覆盖。
 
 ## 6. 价格与折扣规则
 
@@ -290,7 +298,7 @@ Coupon、Code、Save与主价共用DOM树及隐藏/脚本/推荐/评论/二手�
 
 Feedback来源是两个指定店铺的Amazon Seller Central【反馈管理器】页面的【最新反馈】区域，不是商品详情页评论、Review或Q&A。筛选条件固定为评级`<= 3`，不把缺少评级的记录默认当作合格。每个店铺必须在独立上下文中从配置URL进入、校验当前店铺身份，然后按日期窗口和【下一个】按钮分页；读取到合格反馈后逐条点击订单编号进入二级界面，读取订单商品编号、ASIN和SKU。
 
-后台采集的会话、凭证、验证码和权限检查独立于零售页面的US/CA邮编与价格浏览器。每个页面导航、翻页和订单详情访问之间使用配置化的保守随机等待，并在页面稳定、身份和目标控件确认后继续；具体等待值必须进入运行日志，不能用固定高频循环。登录页只允许按上段规则进行有限、逐店重开上下文重试；验证码、风控提示、页面异常、分页状态不变化或订单身份不一致时立即停止当前店铺，不连续重试；另一店铺仍使用全新上下文独立执行。后台任务遵守统一运行锁和日志收口，但单店铺失败只阻断Feedback子表对应范围；价格结果可以继续发布。
+后台采集的会话、凭证、验证码和权限检查独立于零售页面的US/CA邮编与价格浏览器。首页、Feedback页面、翻页和订单详情访问之间使用配置化的保守随机等待，并在页面稳定、身份和目标控件确认后继续；具体等待值必须进入运行日志，不能用固定高频循环。登录页、首页路由错误或临时网络不可达只允许按上段规则进行有限、逐店重开上下文重试；验证码、风控提示、页面异常、分页状态不变化或订单身份不一致时立即停止当前店铺，不连续重试；另一店铺仍使用全新上下文独立执行。后台任务遵守统一运行锁和日志收口，但单店铺失败只阻断Feedback子表对应范围；价格结果可以继续发布。
 
 紫鸟窗口策略固定为`feedback.browser_visibility=background`。每次打开店铺必须通过官方CLI的`store open --headless`进入该店铺的当前操作上下文，后续`page visit`、翻页和详情读取只作用于该上下文；不得创建可见桌面窗口、弹出新窗口、调用Windows前台/置顶/抢焦点API，不能干扰用户当前界面。“置顶当前界面”在本项目中定义为保持该店铺上下文作为后续页面操作目标，不是把操作窗口强制置于操作系统最前端。若CLI或Bridge不支持无头打开，必须记录`browser_visibility=blocked`及原因并停止该店铺，禁止退回可见模式。运行证据和日志记录窗口策略、`store_id`、CLI返回状态、是否实际打开、`auth_retry_count`和`auth_retry_delays_seconds`，不保存Cookie或凭证。
 
@@ -337,6 +345,13 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 导航、文档/价格等待、页面脚本读取和稳定等待按剩余deadline裁剪；禁用导航内部重试，重试只由外层统一执行，每次直接重新导航，不插入额外无预算refresh/rebuild。DrissionPage的`tab.get()`或`doc_loaded()`可能在URL已经切换到目标页时因等待超时返回`False`：此时只有在当前Tab URL同时满足目标Marketplace域名和请求ASIN时才允许继续，后续仍必须执行页面元数据、最终URL/ASIN、页面结构和DOM身份门禁；URL为空、站点不符、ASIN不符或Chrome `chrome-error://`错误页必须立即标记`navigation_failed`/`navigation_timeout`并停止读取，不能解析旧DOM。商品页动态主体等待只能使用当前商品区域（标题、主图、Buy Box、主价或可用性），不得使用全页面任意`.a-price`，防止推荐卡提前满足等待条件；地址弹窗输入框和提交按钮按有限轮询等待异步渲染，不能用单次固定短sleep判定`postal_input_not_found`。返回成功前复查截止时间，超时清除价格并标记deadline_exceeded。初始化首页timeout为30秒（不是30000秒）。商品间1～3秒等待不计入90秒抓取预算；浏览器驱动/操作系统失去响应仍不是进程级强制终止保障，不能宣称任何环境下墙钟严格90秒。
 
 浏览器启动兼容与诊断：`browser_auto_port=true`时为每次浏览器会话在受控本地端口范围内分配独立CDP端口，禁止复用残留的固定9222会话；当前Chrome 136+/152与DrissionPage 4.1.1.4组合必须带`--remote-allow-origins=*`，本机已验证需要`--disable-gpu`和`--no-sandbox`才能稳定建立CDP连接，三项均可由配置关闭后在迁移设备重新验收。不得固定过期User-Agent，使用本机Chromium原生版本。浏览器启动日志必须记录`stage`、Marketplace、headless、auto_port、no_sandbox、disable_gpu、是否显式代理、脱敏启动参数、CDP address、browser version和耗时；setup日志记录目标首页导航返回值、观察到的URL/host、位置模式/验证方法和失败原因；商品导航日志记录`tab.get`/`doc_loaded`返回False时的观察URL、ASIN绑定结果和Chrome错误页。Feedback紫鸟启动日志还必须记录`browser_visibility=background`、`store_open --headless`和当前店铺会话是否复用；日志不得保存Secret、Cookie、Authorization或完整代理凭证。
+
+### 9.1 跨项目紫鸟上下文与 MFA 门禁（2026-09-22）
+
+- Amazon Daily 与 T2、T8、T9、T11 共用本机紫鸟成员账号/Bridge，但不能共用浏览器标签、Profile、代理出口或 Seller Central 会话。每次运行必须取得公共锁 `D:\projects\.runtime\ziniao_sellercentral.lock`，再取得 `outputs/weekly_scheduler.lock`；公共锁尚未接入全部项目前，生产状态保持 `PARTIAL/CONTROLLED`。
+- 启动前除了 `doctor` 外，还必须按 `store_id` 执行 `store open --headless → Seller Central /home → URL/标题/后台壳/账号身份回读`。只有 `HOME_OK` 才能进入 Amazon 商品或 Feedback 页面；`AMAZON_LOGIN_REQUIRED`、`AMAZON_MFA_REQUIRED`、`AMAZON_CAPTCHA`、`AMAZON_RATE_LIMIT`、`ZINIAO_PROXY_UNREACHABLE`、`IDENTITY_MISMATCH` 任一状态都要关闭当前上下文并阻断，不读取旧 DOM、旧 HTML 或旧价格。
+- MFA 只能由授权人工在当前店铺完成；自动化不得读取/填写 OTP、复制 Cookie、切换未登记代理或通过刷新/循环重试规避验证。人工恢复后必须重新从 `/home` 做身份门禁，不能从上次失败的业务页继续。
+- manifest/log 只记录 `project/run_id/store_id/target_url/egress_status/home_status/risk_status/close_status` 等脱敏元数据。统一规程见[紫鸟跨项目上下文与MFA风控规程](../../.knowledge/knowledge/api/紫鸟跨项目上下文与MFA风控规程_20260922.md)。
 
 ## 10. 多站点、ASIN和币种
 
@@ -442,9 +457,9 @@ App ID为非敏感配置；真实Secret只走第3节来源。不输出完整凭�
 - 正常任务通知中必须同时显示执行时段、`source_period_id`、`selection_mode`和`run_id`。周一早间应明确标注“沿用上一周周报”，周一下午应明确标注“已切换最新周报”。
 - 调度入口必须把稳定的`scheduled_slot`传给Python（例如`monday_0730`、`monday_1530`、`weekday_0730`、`weekday_1530`）；不能只用进程实际启动时间推断时段。`StartWhenAvailable`造成延迟补跑时仍按原计划时段选择来源。人工运行必须显式标记为`manual`并指定来源策略，不能伪装成周一早间或周一下午。
 
-### 16.2 Feedback早间窗口和状态账本
+### 16.2 Feedback手动窗口和状态账本
 
-- Feedback逻辑槽位为`feedback_0730`，只在每天`07:30`（`Asia/Shanghai`）执行；价格任务的`15:30`运行不触发Feedback。统一运行锁已被占用时，Feedback不得另起并发写回，应记录`skipped_lock`并等待下一个定时窗口或明确人工重试。
+- Feedback不再绑定`feedback_0730`或任何价格计划任务。当前自动调度保持暂停；人工使用`--feedback-only --confirm`（测试可加`--dry-run`）时才建立一次Feedback窗口，统一运行锁已被占用时不得另起并发写回，应记录`skipped_lock`并明确重试。
 - `outputs/feedback/feedback_state.json`只保存非敏感的窗口状态：首次窗口是否完成、最近一次可推进的运行时间、两个店铺各自的窗口边界、最后成功读取到的分页/反馈游标摘要和规则版本。凭证、Cookie、Authorization、完整订单详情响应不得写入状态账本。
 - 当且仅当两个店铺都完成窗口边界读取、结果合并、近10日过滤、目标表9列回读，且没有未处理的认证/风控/分页阻断时，才将首次7日状态推进为后续3日。单店铺失败、二级详情未完成或写后回读失败时保留旧检查点，下次不得缩短为3日窗口。
 - Feedback的来源URL、页面标题/区域定位、分页页码、【下一个】按钮状态、详情订单身份、抓取时间、等待时间、运行起止时间和退出原因写入`outputs/feedback/{run_id}/`；只保留脱敏后的诊断。
@@ -472,7 +487,7 @@ App ID为非敏感配置；真实Secret只走第3节来源。不输出完整凭�
 
 ### 18.1 正式入口
 
-启动中心选项3为PD03单条dry-run，选项4为weekly-run --confirm全量；未指定流程及旧--push-only拒绝执行，避免误入旧六列写入。每天07:30/15:30的Windows任务使用无控制台的`wscript.exe`→`bin/hidden_ps1.vbs`→隐藏PowerShell→`scheduled_run.ps1`链路；`scheduled_run.bat`和HTML维护BAT仅保留兼容入口，完全无窗口的手工调用应直接使用同一`wscript.exe`启动器。手工启动中心仍可见，便于交互选择。
+启动中心选项3为PD03单条dry-run，选项4为weekly-run --confirm全量；未指定流程及旧--push-only拒绝执行，避免误入旧六列写入。每天07:30/15:30的Windows任务使用无控制台的`wscript.exe`→`bin/hidden_ps1.vbs`→隐藏PowerShell→`scheduled_run.ps1`链路，并由包装器传入`--price-only`；`scheduled_run.bat`和HTML维护BAT仅保留兼容入口，完全无窗口的手工调用应直接使用同一`wscript.exe`启动器。手工Feedback使用`.venv\Scripts\python.exe app\main.py --feedback-only --confirm`，不经过周报价格流程；手工启动中心仍可见，便于交互选择。
 
 以下从项目根目录运行：
 
@@ -488,7 +503,10 @@ $env:PYTHONPATH='app'
 .venv\Scripts\python.exe app\main.py --weekly-run --dry-run --sheets PD03 --limit 1
 
 # 正式全量价格任务：按周一早间沿用/周一下午切换规则选择来源，刷新A:G及价格、发通知
-.venv\Scripts\python.exe app\main.py --weekly-run --confirm
+.venv\Scripts\python.exe app\main.py --weekly-run --price-only --confirm
+
+# 手动单独运行Feedback（不读取周报、不抓价格；测试可追加 --dry-run）
+.venv\Scripts\python.exe app\main.py --feedback-only --confirm
 
 # 恢复同周期指定批次；会写固定表并发送通知，不重抓Amazon
 .venv\Scripts\python.exe app\main.py --weekly-push-only --run-id <已有run_id> --confirm
@@ -538,7 +556,7 @@ $env:PYTHONPATH='app'
 
 ### 19.2 每天两次与周一换周
 
-当前Windows任务由`bin/schedule.ps1`创建四条价格槽位任务：周一07:30 `AmazonDaily_0730`、周二至周日07:30 `AmazonDaily_0730_weekday`、周一15:30 `AmazonDaily_1530`、周二至周日15:30 `AmazonDaily_1530_weekday`。Feedback逻辑任务复用每天07:30的两个价格槽位，在同一进程和统一锁内只执行一次；不得额外安装与之并发写`Feedback差评汇总`的独立任务。四条任务均为WeeksInterval=1、EndBoundary为空。任务直接以`wscript.exe //B //NoLogo bin/hidden_ps1.vbs bin/scheduled_run.ps1 <scheduled_slot>`启动隐藏PowerShell，再执行`app/main.py --weekly-run --confirm --scheduled-slot <scheduled_slot>`，07:30槽位额外执行`feedback_0730`阶段，不经过可见的bat/cmd窗口。旧版本若仍显示`Execute=cmd.exe`或`scheduled_run.bat`，必须重新运行安装脚本替换任务定义。
+当前Windows任务由`bin/schedule.ps1`创建四条价格槽位任务：周一07:30 `AmazonDaily_0730`、周二至周日07:30 `AmazonDaily_0730_weekday`、周一15:30 `AmazonDaily_1530`、周二至周日15:30 `AmazonDaily_1530_weekday`。四条任务均只运行价格/前端流程，Feedback不再挂载到07:30任务；明天早上的自动Feedback保持暂停，人工需要时用`--feedback-only --confirm`单独运行。四条任务均为WeeksInterval=1、EndBoundary为空。任务直接以`wscript.exe //B //NoLogo bin/hidden_ps1.vbs bin/scheduled_run.ps1 <scheduled_slot>`启动隐藏PowerShell，再执行`app/main.py --weekly-run --price-only --confirm --scheduled-slot <scheduled_slot>`，不经过可见的bat/cmd窗口。旧版本若仍显示`Execute=cmd.exe`或`scheduled_run.bat`，必须重新运行安装脚本替换任务定义。
 
 当前账号为Interactive：需电脑开机且账号已登录；不需GPT窗口。任务Hidden=true、Execute=wscript.exe、WScript批处理模式与PowerShell WindowStyle=Hidden共同保证不创建可见终端；用户不能因关闭控制台误停。StartWhenAvailable=true，开机或恢复后补触发错过时段，入口必须把原定`scheduled_slot`继续传给Python，不能按实际补跑时间重新判断来源；整批锁与IgnoreNew共同防重叠。日志使用UTF-8保存开始/结束、退出码和`scheduled_slot`。安装脚本bin/schedule.ps1创建上述四条时段任务；若安装前两个15:30任务处于禁用状态，重装必须保持下午整组禁用，不得因修复早间任务静默恢复下午执行。不操作HTML服务或防火墙，不另装重复调度器。
 

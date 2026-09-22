@@ -16,6 +16,8 @@ CLI（方案 19 + 当前测试方案修正）：
   --resume                 恢复最近有效的未完成批次（跨进程断点续跑）
   --run-id <id>            明确恢复指定批次
   --force-push             技术异常比例超阈值时仍写入（人工确认恢复推送）
+  --price-only             正式价格/前端任务不进入Feedback阶段
+  --feedback-only --confirm 手动单独运行Feedback，不抓取商品价格
   --inspect-feishu-layout  只读预检目标表布局，不写任何数据
   --migrate-feishu-columns [--sheets ...] --confirm  兼容旧维护流程的一次性六列表头迁移
 """
@@ -135,6 +137,10 @@ def parse_args() -> argparse.Namespace:
                     help='从正式快照初始化/同步独立结果表 A:G（必须 --confirm）')
     ap.add_argument('--weekly-run', action='store_true',
                     help='新批次复制周报；刷新固定结果表A:G、H:M、N:T和U:V')
+    ap.add_argument('--price-only', action='store_true',
+                    help='只运行价格与前端检查；跳过Feedback阶段（计划任务固定使用）')
+    ap.add_argument('--feedback-only', action='store_true',
+                    help='只运行Feedback后台采集，不读取周报或抓取商品价格（手动使用）')
     ap.add_argument('--notify-manager-only', action='store_true',
                     help='本次正式运行只通知 feishu_manager_open_id；不改变默认协作者范围')
     ap.add_argument('--weekly-push-only', action='store_true',
@@ -169,6 +175,7 @@ def parse_args() -> argparse.Namespace:
     inspect_commands += int(args.sync_weekly_result_base)
     inspect_commands += int(args.weekly_run)
     inspect_commands += int(args.weekly_push_only)
+    inspect_commands += int(args.feedback_only)
     inspect_commands += int(bool(args.amazon_poc_marketplace or args.amazon_poc_asin))
     if inspect_commands > 1:
         raise SystemExit('只读预检命令不能同时使用')
@@ -218,6 +225,22 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit('--sync-weekly-result-base 是独立写入命令，不能与抓取或其他操作同用')
     if args.weekly_run and args.push_only:
         raise SystemExit('--weekly-run 暂不能与旧 --push-only 同用')
+    if args.price_only and not args.weekly_run:
+        raise SystemExit('--price-only 只能与 --weekly-run 同用')
+    if args.feedback_only and args.weekly_run:
+        raise SystemExit('--feedback-only 不能与 --weekly-run 同用')
+    if args.feedback_only and args.weekly_push_only:
+        raise SystemExit('--feedback-only 不能与 --weekly-push-only 同用')
+    if args.feedback_only and args.push_only:
+        raise SystemExit('--feedback-only 不能与旧 --push-only 同用')
+    if args.feedback_only and (args.fetch_only or args.force_fetch or args.resume
+                               or args.force_push or args.limit or args.asins
+                               or args.no_headless):
+        raise SystemExit('--feedback-only 不能与商品抓取参数同用')
+    if args.feedback_only and not (args.dry_run or args.confirm):
+        raise SystemExit('--feedback-only 正式写入Feedback表时必须同时提供 --confirm')
+    if args.feedback_only and args.scheduled_slot != 'manual':
+        raise SystemExit('--feedback-only 必须使用 --scheduled-slot manual')
     if args.weekly_run and not (args.dry_run or args.fetch_only or args.limit or args.asins) \
             and not args.confirm:
         raise SystemExit('--weekly-run 正式写入独立结果表时必须同时提供 --confirm')
@@ -1244,8 +1267,13 @@ def _feedback_report_base(status: str, *, reason: str = '') -> dict:
 
 
 def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
-                        *, execution_started_at: datetime | None = None) -> dict:
-    """Run independent Feedback collection only in the daily 07:30 slot.
+                        *, execution_started_at: datetime | None = None,
+                        allow_manual: bool = False) -> dict:
+    """Run Feedback for a scheduled 07:30 slot or an explicit manual entry.
+
+    Scheduled price runs never call this function when ``--price-only`` is
+    present.  ``allow_manual`` is reserved for ``--feedback-only`` so a manual
+    collection cannot be confused with a scheduled price slot.
 
     ``execution_started_at`` is the wall-clock timestamp captured when the
     parent task began.  It is deliberately passed through to the Feedback
@@ -1254,7 +1282,7 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
     """
     feedback_cfg = cfg.get('feedback') or {}
     slot = getattr(args, 'scheduled_slot', 'manual') or 'manual'
-    if slot not in ('monday_0730', 'weekday_0730'):
+    if slot not in ('monday_0730', 'weekday_0730') and not allow_manual:
         return _feedback_report_base('skipped_schedule', reason=f'仅07:30槽位运行，当前={slot}')
     if not feedback_cfg.get('enabled'):
         return _feedback_report_base('not_configured', reason='feedback.enabled=false')
@@ -1613,8 +1641,13 @@ def weekly_daily_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, logg
     if not args.asins and not args.limit:
         for item in selected:
             results_by_sheet.setdefault(item['result_sheet'], [])
-    feedback_report = _run_feedback_stage(
-        fc, cfg, run_id, args, logger, out, execution_started_at=started_at)
+    if getattr(args, 'price_only', False):
+        feedback_report = _feedback_report_base(
+            'skipped_price_only', reason='计划任务为价格/前端独立流程，Feedback改为手动运行')
+        p(logger, '[Feedback] skipped_price_only：本批只执行价格与前端检查')
+    else:
+        feedback_report = _run_feedback_stage(
+            fc, cfg, run_id, args, logger, out, execution_started_at=started_at)
     manifest['feedback_report'] = feedback_report
     manifest.update(feedback_report)
     if not args.dry_run and not args.fetch_only:
@@ -1890,6 +1923,39 @@ def weekly_push_only_flow(fc: FeishuClient, cfg: dict, sheets: list[str], args, 
     _notify_run_collaborators(fc, cfg, logger, args.run_id, text, out)
 
 
+def feedback_only_flow(fc: FeishuClient, cfg: dict, args, logger) -> None:
+    """手动Feedback独立流程；不读取周报、不抓取商品、不写价格结果表。"""
+    started = time.monotonic()
+    started_at = datetime.now()
+    run_id = args.run_id or f'{make_run_id()}_feedback'
+    out = OUTPUT_DIR / 'daily_runs' / datetime.now().strftime('%Y-%m-%d')
+    out.mkdir(parents=True, exist_ok=True)
+    feedback_args = argparse.Namespace(
+        scheduled_slot='manual',
+        dry_run=bool(args.dry_run),
+        fetch_only=False,
+    )
+    report = _run_feedback_stage(
+        fc, cfg, run_id, feedback_args, logger, out,
+        execution_started_at=started_at, allow_manual=True)
+    report.update({
+        'run_id': run_id,
+        'mode': 'feedback_only',
+        'started_at': started_at.isoformat(timespec='seconds'),
+        'finished_at': datetime.now().isoformat(timespec='seconds'),
+        'elapsed_seconds': round(time.monotonic() - started, 3),
+    })
+    path = out / f'{run_id}_feedback_summary.json'
+    atomic_json(path, report)
+    p(logger, '[feedback-only] ' + json.dumps({
+        'run_id': run_id,
+        'status': report.get('feedback_status'),
+        'rows_written': report.get('feedback_rows_written', 0),
+        'elapsed_seconds': report.get('elapsed_seconds', 0.0),
+        'evidence': report.get('feedback_evidence_root', ''),
+    }, ensure_ascii=False))
+
+
 def _result_for_verify(cr: CrawlResult) -> list:
     from weekly_result import result_values
     return result_values(cr)
@@ -2015,6 +2081,8 @@ def _main_unlocked():
             weekly_daily_flow(fc, cfg, sheets, args, logger)
         elif args.weekly_push_only:
             weekly_push_only_flow(fc, cfg, sheets, args, logger)
+        elif args.feedback_only:
+            feedback_only_flow(fc, cfg, args, logger)
         elif args.amazon_poc_marketplace:
             amazon_marketplace_poc_flow(cfg, logger, args)
         elif args.inspect_feishu_layout:

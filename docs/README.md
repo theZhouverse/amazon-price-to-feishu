@@ -9,7 +9,9 @@
 
 阅读顺序：SPEC → TASKS当前索引 → REVIEWS未解决项。完整目录树及文档维护矩阵见SPEC第4节，正式命令和Windows调度见第18～19节。
 
-当前代码模块架构图：[amazon_daily_architecture.html](amazon_daily_architecture.html)；对应可审查的架构规格：[amazon_daily_architecture.json](amazon_daily_architecture.json)。图按提交 `7c2ce802100c81f89ca691827b1a9a018262d58d` 的实际文件证据生成。
+当前代码模块架构图：[amazon_daily_architecture.html](amazon_daily_architecture.html)；对应可审查的架构规格：[amazon_daily_architecture.json](amazon_daily_architecture.json)。图按提交 `f1c110b0f7bc1f50a981ecec553b3b963d2a645e` 的实际文件证据生成。
+
+当前调度边界：服务器07:30/15:30只运行价格与前端捕捉，计划任务显式使用`--price-only`，不会打开紫鸟或写Feedback；人工需要采集时使用`app\main.py --feedback-only --confirm`。明天早上的Feedback自动步骤保持暂停，详见[SPEC](SPEC.md)和[TASKS](TASKS.md)。
 
 当前生产入口按SPEC执行每天07:30/15:30：周一早间沿用、周一下午切换，周二至周日稳态运行（含周六日）；本地工作区位于生产分支 `fix-codescan-20260826`。2026-09-10 最新隐藏窗口全量 run `20260910_160228` 已覆盖18个价格子表和两个Seller Central店铺Feedback：固定结果表基础/前端覆盖719行，489行通过写入、230行保留阻断；Feedback固定子表 `41u25y` 合并后写入10条并通过严格9列回读，店铺值为“冬豚/北蓉”，且已置于最后。HTML归档与局域网服务当前关闭，既有历史HTML不删除；固定结果表18个业务子表的22列表头已校准，空白 `Feedback????`/`Sheet1` 已删除（详见TASKS/REVIEWS最新节）。前端规则版本为 `2026-09-11-v16`：BSR只识别当前商品详情树中与请求ASIN同表绑定且当前DOM可见的 `Best Sellers Rank` 行，折叠隐藏行只留诊断不计存在；AC只识别当前商品绑定且可见的实际徽章（典型为 `span.a-size-small` 的 `Amazon's Choice`）；两者独立判定，同页同时出现时分别保留事实，不再互相覆盖或误报 `ASIN不合法`；开放Shadow DOM和隐藏/推荐区排除继续保留。P列可见标题为`前端尺寸`。2026-09-11 已将Windows调度拆为周一专用与周二至周日稳态四个显式时段任务并传递`scheduled_slot`；当前四条 Windows 任务已按用户指令恢复为 `Ready/Enabled=True`，周末也会在07:30/15:30触发。CA当前默认改为`direct_no_postal`，不输入邮编而直接读取`amazon.ca`页面价格，结果明确记录位置上下文方法；浏览器启动现使用受控auto-port、Chrome 152兼容参数并将启动/导航阶段写入`outputs/logs/run_*.log`；Feedback紫鸟店铺打开固定使用官方CLI `store open --headless`，不弹出可见窗口、不调用OS置顶/抢焦点API，以当前店铺会话作为页面操作上下文；Docker已取消并不在当前支持范围，详见TASKS与REVIEWS。
 
@@ -21,7 +23,7 @@
 
 结构适配后的正式批次 `20260914_153004` 已于周一 15:30 完成全量：18 个业务子表、721 行基础数据，493 行结果写入并逐行回读，228 行按门禁阻断；CA 的身份不一致仍保留在恢复清单。固定结果表链接未变，结果名同步为 `Amazon周报前端价格捕捉_2026-W38_20260914_153004`，8 名协作者通知成功；本轮 Feedback 按时段规则跳过，HTML归档保持关闭。详细证据与耗时见 TASKS/REVIEWS 最新条目。
 
-Feedback遇到Seller Central登录重定向时，默认只在关闭当前店铺上下文后重开一次后台紫鸟会话并随机等待5～10秒；验证码、风控、权限、Keychain/API Key错误不自动重试，失败只影响该店并留证，不中止另一店或价格发布。Feedback列 I 使用父任务执行开始时间。
+Feedback每次打开店铺都必须先经过 Seller Central 首页，再进入 Feedback；详情返回同样走首页，不复用残留页面。每个店铺最后一页和详情读取完立即关闭紫鸟上下文，再开始下一个店铺；证据记录 `browser_context_closed` 和 `browser_release_policy=close_immediately_after_store`。页面回读记录 `home_url`、`home_navigation_count` 和 `navigation_policy=home_first`。遇到登录重定向、首页路由错误或临时网络不可达时，默认只在关闭当前店铺上下文后重开一次后台紫鸟会话并随机等待5～10秒；验证码、风控、权限、身份不一致、Keychain/API Key错误不自动重试，失败只影响该店并留证，不中止另一店或价格发布。Feedback列 I 使用父任务执行开始时间。
 
 [操作手册](操作手册.md)、[当前业务规则](当前业务规则.md)、[交付清单](交付清单.md)仅保留旧链接跳转，不单独维护规则。代码/配置变化同步SPEC及相关模板，实施和测试写TASKS，问题解决后关闭REVIEWS条目；不要在多个文档复制同一套业务说明。
 

@@ -1,5 +1,46 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-22 价格前端与Feedback拆分复核
+
+- **Implemented**：价格计划任务现在显式调用`--weekly-run --price-only`，即使配置误把`feedback.enabled`打开，也不会进入Feedback阶段；bundle/manifest记录`feedback_status=skipped_price_only`和原因。
+- **Implemented**：新增`--feedback-only --confirm`手动入口。该入口只创建Feedback证据和固定子表写入，不读取周报、不抓取Amazon商品、不改价格结果表；`--dry-run`可用于只读验证。
+- **Pending**：当前服务器15:30批次正在运行，部署不能在进程未退出时覆盖生产目录。批次完成后需做服务器暂存、逐文件SHA-256回读，并确认07:30服务器任务使用新包装器；不能把“代码已推送”当作服务器已生效。
+- **Operational decision**：明天早上的Feedback自动步骤保持暂停，价格前端仍由服务器运行；本地07:30价格任务必须保持停用。待人工完成一次`--feedback-only --confirm`并核对Feedback回读后，再另行决定是否恢复任何Feedback自动化。
+- **Validation required**：离线回归、`--weekly-run --price-only --dry-run --limit 1`参数门禁、`--feedback-only --dry-run`入口门禁、服务器任务Action与环境变量回读、服务器下一次07:30价格批次的`skipped_price_only`证据。
+
+## 2026-09-22 下午任务服务器切换复核
+
+- **Observed**：本机 `AmazonDaily_1530`、`AmazonDaily_1530_weekday` 已暂停；早间任务未改动。服务器为 `CHINAMI-UB5FIKT` / `100.74.124.50`，目标为 `D:\projects\amazon_daily_structured_20260821`。
+- **Observed**：服务器旧部署标记为 `436e541`，本地当前已提交版本为 `463a79e`，两者不一致；已将仅包含已提交 `463a79e` 的 108 个 tracked 文件同步到服务器，服务器部署标记已回读为 `463a79e3601720f55ca92f51debf0d950cfffccf`。本地 19 个未提交文件没有同步。
+- **Evidence**：103 个 ASCII 代码/脚本/配置路径逐文件 SHA-256 回读一致；Unicode 文档路径通过文件数量和目标路径复核，未把远端 PowerShell 控制台乱码误判为代码内容差异。临时传输物和运行锁已清理，服务器没有匹配的 AmazonDaily 计划任务。
+- **Decision**：服务器代码已达到“提交版本一致”，项目 `.venv` 已创建并按锁定依赖安装；两条下午 Windows 任务已注册为隐藏入口但保持 `Disabled`。服务器仍没有项目 `.env`，飞书凭证和代理出口未验收，因此没有启动业务，也没有恢复本机下午任务；待凭证、代理/出口、Chrome/紫鸟会话分别验收后再启用并启动。
+
+## 2026-09-22 跨项目紫鸟上下文与 MFA 风险复核
+
+- **Observed**：Amazon Daily 已有进程锁、按店铺关闭浏览器、Feedback home-first 和商品 URL/ASIN 围栏；这些是项目内保护，不等于 T2/T8/T9/T11 之间没有并发。
+- **Observed**：本机 Seller Central 首页只读探针曾返回 `chrome-error://chromewebdata/` / `ERR_SOCKS_CONNECTION_FAILED`，应记录为代理/SOCKS 不可达，不是 MFA；不能用历史 HTML 或上一商品 DOM 补位。
+- **Decision**：新增公共锁、统一 manifest/status、跨项目并发负向测试和人工 MFA 恢复后的重新首页验收。公共锁落地前保持 `PARTIAL/CONTROLLED`，不宣称生产级跨项目稳定。
+
+## 2026-09-22 店铺读取完成后立即释放浏览器上下文
+
+- Feedback 现在按店铺串行：每个店铺读取完最后一页和详情后立即调用官方 `store close`，异常和重试前也先关闭，不把上下文保持到另一店铺或整轮结束。
+- 运行证据记录 `browser_context_closed`、`browser_release_policy=close_immediately_after_store` 和 `browser_close_error`；关闭失败保持阻断，不继续下一个店铺。
+- 不采用操作系统级强杀浏览器进程，因为紫鸟可能共享其他店铺上下文；以官方 CLI 的店铺关闭接口作为安全释放边界。离线测试完成后，仍需在北蓉登录会话恢复后做一次双店只读验收。
+
+## 2026-09-22 北蓉Feedback必须从Seller Central首页开始
+
+- 旧流程只在 `store open --headless` 后直接导航 `feedback_manager_url`，且详情返回直接回到 Feedback，存在复用上一次页面/订单详情残留 DOM 的风险；北蓉最容易暴露该问题。
+- 已修复为每个店铺上下文强制执行“Seller Central 首页（`home_url`）→真实 URL/网络/认证回读→Feedback 管理器”，详情返回也重新经过首页并校验 Feedback 路由；首页或路由不符合预期即停止当前店铺，不使用旧页面。
+- 证据现在包含 `home_url`、`home_navigation_count`、`navigation_policy=home_first`；首页网络不可达仍只允许一次有界恢复，不能把失败降级为空反馈或推进状态。
+- 待完成：在北蓉会话/代理恢复后做一次官方 CLI headless 只读实测，确认首页与 Feedback 两次 URL 回读均通过，再观察下一次 07:30 生产批次；当前不宣称真实采集已验收。
+
+## 2026-09-22 Feedback首页不可达根因与修复
+
+- 通过紫鸟官方 CLI `doctor`、`store list --all`确认本机 Bridge、CLI认证和两个店铺登记均可用；对两个店铺执行 headless 首页只读回读时，浏览器均可能返回 `chrome-error://chromewebdata/` 与 `ERR_SOCKS_CONNECTION_FAILED`。因此本次“can not be reach”是店铺代理/SOCKS连接异常，不是 Feedback URL 或固定子表结构异常。
+- 旧代码只相信 `page visit` 的 CLI成功标记，未回读真实页面；已在每次导航、翻页和详情返回后增加 `page content` 可达性探针，网络错误页现在明确记为 `Feedback首页不可达`，保留脱敏 URL/标题/错误文本。
+- 已将已有默认一次的登录会话恢复扩展为“登录重定向或临时网络/Bridge不可达”的一次有界恢复；每次恢复先关闭当前 headless 店铺上下文再重新打开，验证码、风控、权限、身份不一致和页面结构异常仍不重试。回归覆盖网络错误识别、一次恢复、非瞬态安全错误不恢复。
+- 当前真实页面证据表明 `ERR_SOCKS_CONNECTION_FAILED` 仍可能由店铺代理本身造成；代码会继续另一店铺并将该店标记 `blocked`，不会把不可达误写成空反馈，也不会推进 Feedback 窗口状态。待代理恢复后需执行下一次 07:30 双店回读验收。
+
 ## 2026-09-21 累计周报历史重复 ASIN 阻断（代码已修复，真实补跑待执行）
 
 - 2026-09-21 15:30 的 `seq-6` 任务在 `PD03` 源计划预检阶段失败，根因是累计周报把同一 ASIN 的历史行读入后触发旧的“重复 ASIN，禁止初始化结果表”门禁；未发生 Amazon 抓取或固定结果表写入。

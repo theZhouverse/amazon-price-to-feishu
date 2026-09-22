@@ -22,7 +22,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
 # Python owns outputs/weekly_scheduler.lock for ALL CLI entrypoints.
 # Do not acquire the same lock twice (parent PowerShell + child Python).
-"[$($startedAt.ToString('o'))] START weekly-run --confirm --scheduled-slot $ScheduledSlot" | Set-Content -LiteralPath $logPath -Encoding UTF8
+"[$($startedAt.ToString('o'))] START weekly-run --price-only --confirm --scheduled-slot $ScheduledSlot" | Set-Content -LiteralPath $logPath -Encoding UTF8
 $exitCode = 1
 $runnerError = $null
 try {
@@ -31,7 +31,10 @@ try {
     # this wrapper before it records the final END line.  Keep the wrapper
     # diagnostic path non-terminating and preserve Python's real exit code.
     $ErrorActionPreference = 'Continue'
-    & $python 'app\main.py' '--weekly-run' '--confirm' '--scheduled-slot' $ScheduledSlot 2>&1 | Out-File -LiteralPath $logPath -Encoding utf8 -Append
+    # Scheduled jobs are intentionally price/frontend-only. Feedback is a
+    # separate manual command: app\main.py --feedback-only --confirm.
+    $env:AMAZON_FEEDBACK_ENABLED = 'false'
+    & $python 'app\main.py' '--weekly-run' '--price-only' '--confirm' '--scheduled-slot' $ScheduledSlot 2>&1 | Out-File -LiteralPath $logPath -Encoding utf8 -Append
     if ($null -ne $LASTEXITCODE) {
         $exitCode = [int]$LASTEXITCODE
     }
