@@ -4,7 +4,7 @@
 
 - **Implemented**：价格计划任务现在显式调用`--weekly-run --price-only`，即使配置误把`feedback.enabled`打开，也不会进入Feedback阶段；bundle/manifest记录`feedback_status=skipped_price_only`和原因。
 - **Implemented**：新增`--feedback-only --confirm`手动入口。该入口只创建Feedback证据和固定子表写入，不读取周报、不抓取Amazon商品、不改价格结果表；`--dry-run`可用于只读验证。
-- **Pending**：当前服务器15:30批次正在运行，部署不能在进程未退出时覆盖生产目录。批次完成后需做服务器暂存、逐文件SHA-256回读，并确认07:30服务器任务使用新包装器；不能把“代码已推送”当作服务器已生效。
+- **Verified**：服务器15:30批次已先正常结束（`20260922_155153`，17:25:43，18表/479写入/242阻断/5632.042秒），之后才部署提交`c03cfd027b8a0b0a80707251c69c24c6ff900ddb`到D盘目标。远端103个ASCII源码/脚本路径逐文件SHA-256一致，`DEPLOYED_COMMIT.txt`回读一致；四条服务器任务均为隐藏`wscript.exe`入口且`Ready`，本地四条价格任务均`Disabled`。
 - **Operational decision**：明天早上的Feedback自动步骤保持暂停，价格前端仍由服务器运行；本地07:30价格任务必须保持停用。待人工完成一次`--feedback-only --confirm`并核对Feedback回读后，再另行决定是否恢复任何Feedback自动化。
 - **Validation required**：离线回归、`--weekly-run --price-only --dry-run --limit 1`参数门禁、`--feedback-only --dry-run`入口门禁、服务器任务Action与环境变量回读、服务器下一次07:30价格批次的`skipped_price_only`证据。
 

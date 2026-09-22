@@ -6,7 +6,7 @@
 - [x] 新增独立手动入口`app\main.py --feedback-only --confirm`（`--dry-run`可做只读验证）：只运行Feedback采集，不读取周报、不抓Amazon价格、不写价格结果表；仍复用全局运行锁和既有店铺home-first/立即关闭策略。
 - [x] 价格任务bundle/manifest将Feedback状态记为`skipped_price_only`并保存原因，不再把“未采集Feedback”误报为运行失败。
 - [x] 更新SPEC、操作入口与调度验收规则；当前运行中的服务器15:30批次不停止、不重启，避免在Python进程使用代码时覆盖生产目录。
-- [ ] 当前服务器15:30批次完成后，将本次提交版本暂存/逐文件校验到服务器`D:\projects\amazon_daily_structured_20260821`；随后确认服务器07:30任务已启用、仅价格运行，并保持本地07:30任务停用，避免双机重复抓取。
+- [x] 服务器15:30批次已于`2026-09-22 17:25:43+08:00`正常结束（`run_id=20260922_155153`，18个子表，479行写入、242行阻断，耗时5632.042秒，8名协作者通知成功）。随后将提交`c03cfd027b8a0b0a80707251c69c24c6ff900ddb`同步到服务器唯一目标`D:\projects\amazon_daily_structured_20260821`；远端103个ASCII源码/脚本路径逐文件SHA-256回读一致，`DEPLOYED_COMMIT.txt`与提交一致。服务器四条价格任务已启用并回读`Ready`、`wscript.exe`隐藏入口、周一/周二至周日触发器正确；本地四条价格任务均已停用，避免双机重复抓取。
 - [ ] 明天早晨不自动运行Feedback；人工执行`--feedback-only --confirm`后，分别核对`outputs/daily_runs/<日期>/*_feedback_summary.json`、`outputs/feedback/<run_id>/`与固定Feedback子表写后回读。
 
 
