@@ -100,6 +100,15 @@ class SchedulerPolicyTests(unittest.TestCase):
         self.assertIn('%*', scheduled_bat)
         self.assertIn('WindowStyle Hidden', launcher.read_text(encoding='utf-8'))
 
+    def test_feedback_only_is_a_manual_separate_entry(self):
+        import sys
+        import main
+        with patch.object(sys, 'argv', ['main.py', '--feedback-only', '--dry-run']):
+            args = main.parse_args()
+        self.assertTrue(args.feedback_only)
+        self.assertFalse(args.weekly_run)
+        self.assertEqual(args.scheduled_slot, 'manual')
+
 
 if __name__ == '__main__':
     unittest.main()
