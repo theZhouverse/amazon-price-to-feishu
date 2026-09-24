@@ -16,17 +16,29 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     exit 2
 }
 Set-Location -LiteralPath $projectRoot
+# Price/frontend runs never open Feedback or紫鸟店铺, but the price result
+# still needs the shared Feishu app credentials for source/result I/O.  Load
+# only that shared project context here; Feedback remains disabled below and
+# has its own manual credential gate.
+$env:AMAZON_FEEDBACK_ENABLED = 'false'
 $credentialImportError = $null
-try {
-    if (-not (Test-Path -LiteralPath $globalCredentialLoader -PathType Leaf)) {
-        throw "GLOBAL_CREDENTIAL_LOADER_MISSING:$globalCredentialLoader"
+$feishuCredentialsReady = (-not [string]::IsNullOrWhiteSpace($env:FS_APP_ID)) -and
+    (-not [string]::IsNullOrWhiteSpace($env:FS_APP_SECRET))
+if (-not $feishuCredentialsReady) {
+    try {
+        if (-not (Test-Path -LiteralPath $globalCredentialLoader -PathType Leaf)) {
+            throw "PRICE_FEISHU_CREDENTIAL_LOADER_MISSING:$globalCredentialLoader"
+        }
+        . $globalCredentialLoader -ProjectId 'amazon_daily' -ProjectRoot $projectRoot -Import
+    } catch {
+        $credentialImportError = $_.Exception.Message
     }
-    . $globalCredentialLoader -ProjectId 'amazon_daily' -ProjectRoot $projectRoot -Import
-} catch {
-    $credentialImportError = $_.Exception.Message
+    $feishuCredentialsReady = (-not [string]::IsNullOrWhiteSpace($env:FS_APP_ID)) -and
+        (-not [string]::IsNullOrWhiteSpace($env:FS_APP_SECRET))
 }
-if ($null -ne $credentialImportError) {
-    "[$($startedAt.ToString('o'))] BLOCKED: shared credential import failed: $credentialImportError" | Set-Content -LiteralPath $logPath -Encoding UTF8
+if ($null -ne $credentialImportError -or -not $feishuCredentialsReady) {
+    $detail = if ($null -ne $credentialImportError) { $credentialImportError } else { 'PRICE_FEISHU_CREDENTIALS_MISSING_AFTER_IMPORT' }
+    "[$($startedAt.ToString('o'))] BLOCKED: price run requires shared Feishu credentials: $detail" | Set-Content -LiteralPath $logPath -Encoding UTF8
     exit 12
 }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -36,7 +48,9 @@ $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUTF8 = '1'
 # Python owns outputs/weekly_scheduler.lock for ALL CLI entrypoints.
 # Do not acquire the same lock twice (parent PowerShell + child Python).
-"[$($startedAt.ToString('o'))] START weekly-run --price-only --confirm --scheduled-slot $ScheduledSlot" | Set-Content -LiteralPath $logPath -Encoding UTF8
+# The scheduled path is deliberately price/frontend-only. Feedback/Ziniao
+# credentials belong to the separate manual `--feedback-only` entrypoint.
+"[$($startedAt.ToString('o'))] START weekly-run --price-only --confirm --scheduled-slot $ScheduledSlot (Feedback disabled; shared Feishu credentials loaded)" | Set-Content -LiteralPath $logPath -Encoding UTF8
 $exitCode = 1
 $runnerError = $null
 try {
@@ -47,7 +61,6 @@ try {
     $ErrorActionPreference = 'Continue'
     # Scheduled jobs are intentionally price/frontend-only. Feedback is a
     # separate manual command: app\main.py --feedback-only --confirm.
-    $env:AMAZON_FEEDBACK_ENABLED = 'false'
     & $python 'app\main.py' '--weekly-run' '--price-only' '--confirm' '--scheduled-slot' $ScheduledSlot 2>&1 | Out-File -LiteralPath $logPath -Encoding utf8 -Append
     if ($null -ne $LASTEXITCODE) {
         $exitCode = [int]$LASTEXITCODE

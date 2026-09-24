@@ -491,3 +491,10 @@
 - **Safety**：本轮未读取、打印、复制或提交任何 App Secret、紫鸟 API Key、领星密码、Cookie、OTP、Authorization 或浏览器 Profile。真实的三个全局凭证入口文件仍未创建，因此 loader 目前按设计返回缺失门禁。
 - **Lingxing decision**：领星专用 Chrome 的 Cookie、Local Storage、Session Storage 和用户目录属于登录态，不跨设备复制；服务器必须重新登录并完成页面身份、模板、日期和新下载验收。
 - **Blocked**：服务器目标机的三个飞书应用 Secret、紫鸟 Keychain 和独立领星文件/人工登录仍需管理员在目标机完成；在这些只读验收完成前不启动真实业务或服务器计划任务。
+
+## 2026-09-24 15:30 服务器价格任务未启动：包装器错误依赖Feedback凭证（已修复）
+
+- 服务器任务 `AmazonDaily_1530_weekday` 的计划触发和隐藏入口均正常；失败发生在 PowerShell 包装器进入 Python 之前。日志 `outputs/scheduler_logs/2026-09-24_153001_416_13792.log` 记录 `BLOCKED: shared credential import failed: GLOBAL_CREDENTIAL_LOADER_MISSING:...project-credential-env.ps1`，退出码为 `12`，所以没有生成下午价格运行目录，也没有写入固定结果表。
+- 价格计划任务与Feedback是两个独立边界。修复后包装器先注入 `AMAZON_FEEDBACK_ENABLED=false`，仅加载价格读写必需的共享飞书应用凭证，再运行 `--weekly-run --price-only`；不打开Feedback/Ziniao店铺。缺少Feedback业务运行时不应阻断价格任务，但缺少飞书应用凭证必须安全停止并明确记录 `PRICE_FEISHU_CREDENTIAL_*`。Feedback继续使用人工 `--feedback-only --confirm`。
+- 当前服务器的 `FS_APP_ID`/`FS_APP_SECRET`、`D:\projects\.config\feishu-credentials.json` 和全局加载器均不存在；本次没有复制Secret或凭证文件。服务器同步证明代码已修复，但要真正运行仍需管理员按现有控制面规范注入共享飞书凭证。
+- 本轮只做代码/服务器同步和静态回归，没有自动补跑业务；下一次计划窗口以调度日志、run manifest、固定结果表读回和完成通知共同验收。

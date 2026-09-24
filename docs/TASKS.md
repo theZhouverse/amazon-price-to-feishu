@@ -881,3 +881,10 @@
   - 已创建Windows任务`AmazonDaily_20260826_0700`，Schedule Type为One Time Only，Next Run Time为2026-08-26 07:00，状态Ready且Enabled。
   - 任务调用`bin\scheduled_run.bat`，不依赖GPT界面；运行时使用当前无HTML交付配置。
   - 限制：Logon Mode为Interactive only，届时电脑必须开机且Administrator保持登录。
+
+## 2026-09-24 15:30 价格调度凭证门禁修复（已修复，待下一时段观察）
+
+- [x] 服务器 `AmazonDaily_1530_weekday` 已按计划触发，但旧版 `bin\scheduled_run.ps1` 在价格任务启动前强制加载 Feedback/Ziniao 全局凭证；服务器未部署该可选控制面文件，导致日志 `GLOBAL_CREDENTIAL_LOADER_MISSING`、退出码 `12`，本轮未进入 Python 价格流程。
+- [x] 调度包装器现先固定设置 `AMAZON_FEEDBACK_ENABLED=false`，再只加载价格读写所需的共享飞书应用凭证并执行 `--weekly-run --price-only`；不打开Feedback/Ziniao店铺，Feedback仍仅由人工 `--feedback-only --confirm` 入口负责自己的业务凭证门禁。
+- [x] 修复已同步服务器并通过脚本解析、回归检查、远端哈希复核和无业务包装器自检；自检仅记录 `PRICE_FEISHU_CREDENTIAL_LOADER_MISSING`、退出码 `12`，未启动Python或业务抓取。
+- [ ] 当前服务器仍缺少共享飞书凭证文件；待管理员在服务器按控制面规范注入凭证后，下一次任务才应观察 `START ... price-only` 和最终 `END exit=...`。
