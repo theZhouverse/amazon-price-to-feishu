@@ -14,10 +14,12 @@ outputs不进入Git，但其中固定结果身份、周manifest、运行证据�
 
 所有CLI与Windows调度共用运行锁；发布以latest_run登记和本批源指纹为准，旧批次不得覆盖新结果。v4不接受旧规则缓存恢复，需新建正式抓取批次。当前完整优化清单与离线验证范围见TASKS顶部，未完成的在线验收见REVIEWS。
 
+涉及 Seller Central/紫鸟店铺的 Feedback 流程统一使用 `D:\projects\lykj-projects-map` 控制平面：CLI wrapper、主机和店铺身份只从全局 runtime 读取；每次 `store open` 前执行全局 doctor，并在 `D:\projects.runtime\ziniao\_sellercentral.lock` 下串行完成首页、业务读取、关闭和状态回读。本项目不保存第二套 CLI、店铺、Profile 或认证配置。
+
 周报源表按每批快照动态发现全部子表；读取字段按规范化业务表头定位（左侧首个业务字段为主，后段重复辅助字段只审计），允许中间辅助列新增或移动，禁止用历史绝对列号误读。新增描述性子表必须能从标题明确识别 US/CA，或从 ASIN 单元格的单一 Amazon 域名安全推断 US/CA，否则在抓取前 fail-close；固定结果表 A:V 的列位和顺序不变。
 
 HTML归档和8765服务当前全部关闭，既有htmls文件只读留存。服务器四条 `AmazonDaily_*` 任务负责每天自动执行07:30和15:30两个价格时段（周一使用换周专用槽位，周二至周日使用稳态槽位，含周六日）；通过 `wscript.exe` 启动 `hidden_ps1.vbs`，不经过可被误关的终端窗口；本地对应价格任务保持停用，避免双机重复抓取。通知与固定结果表名称使用运行日期的ISO周，同时附内部登记序号供审计。前端规则版本为 `2026-09-11-v16`：BSR 读取当前商品详情树中与请求ASIN同表绑定、且当前DOM可见的精确 `Best Sellers Rank` 行；折叠隐藏行只保留诊断，不计为前端存在。AC 读取当前商品绑定且可见的 `Amazon's Choice` 实际徽章（包括 `span.a-size-small` 与开放 Shadow DOM）；两者独立判定，同一页面同时出现时不互相覆盖。
 
 生产收口增加登记链接首次发现8天门禁；同一序号不能通过重复读取续期。开机补跑重叠时只执行一批，另一计划实例正常记为跳过；调度日志以毫秒和PID区分。正式诊断不再新增HTML文件。
 
-周报中的通用 `Sheet数字` 销售/导出表不会因含 ASIN 被误当价格子表；正式异常会记录完整 traceback。计划任务和调度 BAT 使用隐藏、非交互 PowerShell，避免终端弹窗干扰运行。Feedback差评模块通过`--feedback-only --confirm`手动入口运行并复用统一锁；价格任务不会访问Seller Central或写入`Feedback差评汇总`，未登记两店会话、固定Sheet ID和经过页面验证的选择器时仍保持关闭。
+周报中的通用 `Sheet数字` 销售/导出表不会因含 ASIN 被误当价格子表；正式异常会记录完整 traceback。计划任务和调度 BAT 使用隐藏、非交互 PowerShell，避免终端弹窗干扰运行。Feedback差评模块通过`--feedback-only --confirm`手动入口运行并复用统一锁；每次店铺打开前先通过全局 CLI wrapper 执行 `doctor` 检查 ZClaw Bridge，预检失败不会执行 `store open`；价格任务不会访问Seller Central或写入`Feedback差评汇总`，未登记两店会话、固定Sheet ID和经过页面验证的选择器时仍保持关闭。

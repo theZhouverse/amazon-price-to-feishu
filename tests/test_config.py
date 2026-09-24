@@ -31,15 +31,15 @@ class TestConfigSources(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, '禁止配置'):
                     config_mod.load_config(path)
 
-    def test_root_dotenv_supplies_secret(self):
+    def test_root_dotenv_is_not_a_shared_secret_source(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             path = self._write_config(root)
             (root / '.env').write_text('FS_APP_SECRET=from_file\n', encoding='utf-8')
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, {}, clear=True):
-                cfg = config_mod.load_config(path)
-            self.assertEqual(cfg['feishu_app_secret'], 'from_file')
+                with self.assertRaisesRegex(RuntimeError, '全局飞书凭证'):
+                    config_mod.load_config(path)
 
     def test_system_environment_overrides_dotenv(self):
         with tempfile.TemporaryDirectory() as td:
@@ -47,11 +47,11 @@ class TestConfigSources(unittest.TestCase):
             path = self._write_config(root)
             (root / '.env').write_text('FS_APP_SECRET=from_file\n', encoding='utf-8')
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
-                    patch.dict(os.environ, {'FS_APP_SECRET': 'from_system'}, clear=True):
+                    patch.dict(os.environ, {'FS_APP_ID': 'cli_test-global', 'FS_APP_SECRET': 'from_system'}, clear=True):
                 cfg = config_mod.load_config(path)
             self.assertEqual(cfg['feishu_app_secret'], 'from_system')
 
-    def test_legacy_credential_directory_is_supported_without_duplicate_app_id(self):
+    def test_legacy_credential_directory_is_not_a_shared_secret_source(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             path = self._write_config(root, {'feishu_app_id': 'cli_test'})
@@ -61,10 +61,10 @@ class TestConfigSources(unittest.TestCase):
                 'cli_test\nfrom_legacy_file\n', encoding='utf-8')
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, {}, clear=True):
-                cfg = config_mod.load_config(path)
-            self.assertEqual(cfg['feishu_app_secret'], 'from_legacy_file')
+                with self.assertRaisesRegex(RuntimeError, '全局飞书凭证'):
+                    config_mod.load_config(path)
 
-    def test_legacy_credential_app_id_mismatch_is_blocked(self):
+    def test_legacy_credential_app_id_mismatch_is_blocked_by_global_source_gate(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             path = self._write_config(root, {'feishu_app_id': 'cli_expected'})
@@ -74,7 +74,7 @@ class TestConfigSources(unittest.TestCase):
                 'cli_other\nsecret\n', encoding='utf-8')
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
                     patch.dict(os.environ, {}, clear=True):
-                with self.assertRaisesRegex(RuntimeError, 'App ID'):
+                with self.assertRaisesRegex(RuntimeError, '全局飞书凭证'):
                     config_mod.load_config(path)
 
     def test_explicit_runtime_overrides_are_supported_for_portable_deployments(self):
@@ -82,6 +82,8 @@ class TestConfigSources(unittest.TestCase):
             root = Path(td)
             path = self._write_config(root)
             env = {
+                'FS_APP_ID': 'cli_test-global',
+                'FS_APP_SECRET': 'test-global-secret',
                 'AMAZON_HTML_ARCHIVE_ROOT': '/data/htmls',
                 'AMAZON_HTML_ARCHIVE_ENABLED': 'true',
                 'AMAZON_HTML_SERVER_PORT': '9876',
@@ -104,7 +106,7 @@ class TestConfigSources(unittest.TestCase):
             root = Path(td)
             path = self._write_config(root)
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
-                    patch.dict(os.environ, {'AMAZON_HTML_ARCHIVE_ENABLED': 'maybe'}, clear=True):
+                    patch.dict(os.environ, {'FS_APP_ID': 'cli_test-global', 'FS_APP_SECRET': 'test-global-secret', 'AMAZON_HTML_ARCHIVE_ENABLED': 'maybe'}, clear=True):
                 with self.assertRaisesRegex(RuntimeError, '必须是布尔值'):
                     config_mod.load_config(path)
 
@@ -113,7 +115,7 @@ class TestConfigSources(unittest.TestCase):
             root = Path(td)
             path = self._write_config(root)
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
-                    patch.dict(os.environ, {'AMAZON_FEEDBACK_ENABLED': 'maybe'}, clear=True):
+                    patch.dict(os.environ, {'FS_APP_ID': 'cli_test-global', 'FS_APP_SECRET': 'test-global-secret', 'AMAZON_FEEDBACK_ENABLED': 'maybe'}, clear=True):
                 with self.assertRaisesRegex(RuntimeError, '必须是布尔值'):
                     config_mod.load_config(path)
 
@@ -122,7 +124,7 @@ class TestConfigSources(unittest.TestCase):
             root = Path(td)
             path = self._write_config(root)
             with patch.object(config_mod, 'PROJECT_ROOT', root), \
-                    patch.dict(os.environ, {'AMAZON_HTML_SERVER_PORT': '70000'}, clear=True):
+                    patch.dict(os.environ, {'FS_APP_ID': 'cli_test-global', 'FS_APP_SECRET': 'test-global-secret', 'AMAZON_HTML_SERVER_PORT': '70000'}, clear=True):
                 with self.assertRaisesRegex(RuntimeError, 'html_server_port'):
                     config_mod.load_config(path)
 

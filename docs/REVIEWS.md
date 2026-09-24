@@ -1,5 +1,25 @@
 # REVIEWS：当前未完成的真实验收与剩余边界
 
+## 2026-09-23 统一紫鸟/ZClaw 全局运行时接入（本机与服务器 CLI 已验收，真实店铺页面验收待执行）
+
+- **Verified**：本机实际全局 CLI 为 `C:\Users\Administrator\AppData\Roaming\npm\ziniao-cli.cmd`，版本 `1.0.7`；`config show` 与 `doctor` 均通过，客户端登录用户为 `2026ZCY`，Bridge 为 `127.0.0.1:9481`。
+- **Verified**：本机 `D:\projects\.config\ziniao-credentials.json` 已修正为 `profile_name=2026ZCY`、成员账号 `is_boss=false`、`company_id` 为空；两个店铺登记与 `store list` 返回的店铺 ID 一致。
+- **Verified**：服务器已安装同版本全局 CLI，Profile `2026ZCY` 已写入服务器 Keychain，`doctor`、Bridge、客户端登录状态和 `store list` 均通过；服务器的项目级 `.config` 与全局 map 文件仍需单独迁移验收。
+
+- **Implemented**：`amazon_daily` 已通过 `app/ziniao_runtime.py` 读取全局控制平面的 runtime/registry；项目配置只保留 Feedback 选择器和业务 URL，CLI、店铺 ID/身份、Profile、Cookie 和认证引用不再本地重复登记。
+- **Implemented**：生产默认 CLI 入口是全局 `D:\projects\lykj-projects-map\scripts\ziniao-prod.ps1`，它再按全局主机登记解析 CLI；每次 `store open` 前必须通过 doctor，缺少或失败均阻断。
+- **Implemented**：店铺串行生命周期使用 `D:\projects.runtime\ziniao\_sellercentral.lock`，状态使用 `D:\projects.runtime\ziniao\_context\_status.json`；业务页退出、关闭回读后才释放锁。
+- **Boundary**：本轮未执行真实店铺打开、Amazon 页面读取或飞书写入；下一步必须先完成单店铺 `store open → home-first 身份确认 → 读取 → close` 只读验收。
+
+> 本文件后续较早日期条目中的“项目级 CLI/旧公共锁”仅是历史证据；自本条目起，当前有效口径统一以全局 CLI wrapper、全局 runtime 和固定 `D:\projects.runtime\ziniao` 路径为准。
+
+## 2026-09-23 每次 `store open` 前增加 ZClaw Bridge 预检
+
+- **Observed**：使用登记的项目级 CLI `C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\ziniao-cli.cmd` 执行只读 `doctor`，版本 `1.0.7`，ZClaw Bridge 连通正常，客户端登录用户为 `2026ZCY`；没有打开店铺、导航 Seller Central 或写入飞书。
+- **Code change**：`ZiniaoCliRunner` 新增 `zclaw_doctor()`，不把 `doctor` 的人类可读输出当作页面 JSON 解析，也不把 API Key/Keychain 原文返回给业务层。每个 `FeedbackStoreCollector` 在本次店铺 `store open --headless` 前执行一次预检；失败时不打开店铺，成功后仍需完整执行 `home-first`、页面可达性和身份门禁。
+- **Evidence**：店铺报告新增 `zclaw_preflight_status`、`zclaw_preflight_elapsed_seconds`、`zclaw_preflight_error`；错误只保存脱敏摘要。配置默认 `zclaw_preflight_enabled=true`、超时60秒。网络/Bridge的一次有界恢复仍由既有关闭上下文后重开策略负责，不能用循环 `doctor` 代替恢复。
+- **Validation**：Bridge健康、Bridge失败、预检先于打开、预检失败不打开店铺的定向测试已通过；按 `PYTHONPATH=app;tests .venv\\Scripts\\python.exe -m unittest discover -s tests -q` 执行的项目全量离线回归为 `396/396`。真实Feedback业务采集、固定子表写入和下一次生产窗口仍需单独验收。
+
 ## 2026-09-22 价格前端与Feedback拆分复核
 
 - **Implemented**：价格计划任务现在显式调用`--weekly-run --price-only`，即使配置误把`feedback.enabled`打开，也不会进入Feedback阶段；bundle/manifest记录`feedback_status=skipped_price_only`和原因。
@@ -7,6 +27,13 @@
 - **Verified**：服务器15:30批次已先正常结束（`20260922_155153`，17:25:43，18表/479写入/242阻断/5632.042秒），之后才部署提交`c03cfd027b8a0b0a80707251c69c24c6ff900ddb`到D盘目标。远端103个ASCII源码/脚本路径逐文件SHA-256一致，`DEPLOYED_COMMIT.txt`回读一致；四条服务器任务均为隐藏`wscript.exe`入口且`Ready`，本地四条价格任务均`Disabled`。
 - **Operational decision**：明天早上的Feedback自动步骤保持暂停，价格前端仍由服务器运行；本地07:30价格任务必须保持停用。待人工完成一次`--feedback-only --confirm`并核对Feedback回读后，再另行决定是否恢复任何Feedback自动化。
 - **Validation required**：离线回归、`--weekly-run --price-only --dry-run --limit 1`参数门禁、`--feedback-only --dry-run`入口门禁、服务器任务Action与环境变量回读、服务器下一次07:30价格批次的`skipped_price_only`证据。
+
+## 2026-09-22 “Can’t be reached”与北蓉ZClaw调试端口复核
+
+- **Observed**：冬豚首页只读回读通过；北蓉首次`page content`没有返回页面内容，而是返回`Debug port ... is not ready`与`connect ECONNREFUSED 127.0.0.1:<port>`。该错误发生在ZClaw页面回读边界，不是Amazon `/ap/signin`、MFA、验证码或Feedback URL错误。
+- **Recovery**：按安全顺序先调用官方`store close`释放北蓉上下文，再只重开一次`store open --headless`并从`https://sellercentral.amazon.com/home`重新导航；随后回读成功，URL、店铺公司身份和Seller Central后台壳均通过，最后再次`store close`成功。
+- **Code change**：`seller_feedback.py`现在把ZClaw调试端口未就绪、`ECONNREFUSED`和Bridge未就绪纳入既有一次性临时恢复分类；如果`store open`只建立了部分上下文就失败，也会先best-effort执行`store close`再交给外层恢复。测试覆盖“第一次失败、关闭、重新建立上下文后成功”。不会在原Tab、旧DOM或旧业务结果上继续。
+- **Boundary**：本次没有进入Feedback列表、没有写固定子表、没有发送通知；网络/Bridge首页恢复证据不等于Feedback全量业务验收。若第二次仍不可达，必须记录`blocked/ZINIAO_PROXY_UNREACHABLE`并停止该店铺。
 
 ## 2026-09-22 下午任务服务器切换复核
 
@@ -457,3 +484,10 @@
 6. 超过2000行和宽表读取已有分页回归；真实飞书超大表、目标表容量扩展、复杂公式返回形态及API限流仍需实际验收。不会仅凭替身测试宣称所有规模与公式均通过。
 
 离线测试通过不等于“全流程永远无问题”，也不等于现有飞书历史结果已经重新计算。
+## 2026-09-23 共享凭证全局化与服务器迁移评审
+
+- **Implemented**：全局 `D:\projects\lykj-projects-map` 将三个飞书应用统一映射到本机 `D:\projects\.config\feishu-credentials.json`，将紫鸟明文配置登记到 `D:\projects\.config\ziniao-credentials.json`，领星单独登记；新增 `scripts\project-credential-env.ps1`，实际凭证不再放入项目目录。
+- **Implemented**：Amazon Daily、T2、T8、T9 的生产启动器先在同一 PowerShell 进程加载全局共享凭证；Amazon Daily 配置和 T2 Feishu 客户端不再从项目 `.env` 读取共享 Secret。
+- **Safety**：本轮未读取、打印、复制或提交任何 App Secret、紫鸟 API Key、领星密码、Cookie、OTP、Authorization 或浏览器 Profile。真实的三个全局凭证入口文件仍未创建，因此 loader 目前按设计返回缺失门禁。
+- **Lingxing decision**：领星专用 Chrome 的 Cookie、Local Storage、Session Storage 和用户目录属于登录态，不跨设备复制；服务器必须重新登录并完成页面身份、模板、日期和新下载验收。
+- **Blocked**：服务器目标机的三个飞书应用 Secret、紫鸟 Keychain 和独立领星文件/人工登录仍需管理员在目标机完成；在这些只读验收完成前不启动真实业务或服务器计划任务。

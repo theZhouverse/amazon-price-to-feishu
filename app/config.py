@@ -2,7 +2,7 @@
 """config.py — 配置加载与校验。
 
 非敏感配置：代码默认值 → config/config.json。
-敏感配置：项目根目录 .env → 系统环境变量（系统环境变量优先）。
+敏感配置：全局项目凭证加载器 → 进程环境变量 FS_APP_ID/FS_APP_SECRET；项目根目录 .env 不再提供共享凭证。
 """
 from __future__ import annotations
 
@@ -74,8 +74,8 @@ DEFAULTS = {
     'weekly_registry_sheet_id': 'c1fcd1',  # 2026-08-24 R1.1 只读发现：Sheet1
     'weekly_registry_max_age_days': 8.0,
     'feishu_allowed_hosts': ['wit0jhu6kvu.feishu.cn'],
-    'feishu_app_id': 'cli_aa097133e3355ccd',
-    'feishu_app_secret': '',          # 仅由根目录 .env 或环境变量 FS_APP_SECRET 注入
+    'feishu_app_id': '',              # 仅由全局加载器注入的环境变量 FS_APP_ID 提供
+    'feishu_app_secret': '',          # 仅由全局加载器注入的环境变量 FS_APP_SECRET 提供
     'feishu_output_start_col': 8,     # 紧凑目标表 H 列(1-based)
     'feishu_header_row': 2,           # 目标表表头固定第 2 行
     'feishu_output_headers': [
@@ -104,12 +104,22 @@ DEFAULTS = {
         # in the official CLI's background/headless mode.  A visible window
         # or OS-level foreground/topmost operation is not supported in jobs.
         'browser_visibility': 'background',
-        # A Seller Central login redirect may be a transient store-session
-        # expiry.  Retry that page once after a bounded random wait; CAPTCHA,
-        # risk, permission and keychain failures remain fail-closed.
+        # Every Feedback store session must explicitly re-enter Seller Central
+        # home before opening the Feedback Manager.
+        'home_url': 'https://sellercentral.amazon.com/home',
+        # A Seller Central login redirect or transient homepage/Bridge network
+        # failure may recover after the store context is recreated. Retry once
+        # after a bounded random wait; CAPTCHA, risk, permission, identity and
+        # keychain failures remain fail-closed.
         'auth_retry_attempts': 1,
         'auth_retry_wait_min': 5.0,
         'auth_retry_wait_max': 10.0,
+        # The project-level adapter must run the central read-only doctor
+        # before every store open.  These are policy/timeouts, not CLI or
+        # Bridge configuration; the executable and store identities come from
+        # D:\projects\lykj-projects-map.
+        'zclaw_preflight_enabled': True,
+        'zclaw_preflight_timeout_seconds': 60.0,
         'stores': [],
     },
     # 历史/人工指定子表示例；正式周报运行按快照元数据动态发现，不受此列表限制。
@@ -178,8 +188,8 @@ def load_config(config_path: Path | None = None) -> dict:
             raise RuntimeError('config.json 必须是 JSON 对象')
         if 'feishu_app_secret' in user:
             raise RuntimeError(
-                'config.json 禁止配置 feishu_app_secret；请使用项目根目录 .env '
-                '或系统环境变量 FS_APP_SECRET'
+                'config.json 禁止配置 feishu_app_secret；请由全局加载器注入 '
+                'FS_APP_SECRET'
             )
         cfg.update({k: v for k, v in user.items() if v is not None})
 
@@ -228,35 +238,33 @@ def load_config(config_path: Path | None = None) -> dict:
         else:
             cfg[key] = raw.strip()
 
-    # Secret 只允许来自根目录 .env 或系统环境变量；系统环境变量优先。
-    envf = PROJECT_ROOT / '.env'
-    file_secret = ''
-    if envf.is_file():
+    # Shared Feishu credentials are injected by the global credential loader. The
+    # project .env remains available for project-only settings, but is no
+    # longer a shared-secret source during local or server execution.
+    # Production config.json intentionally has no App ID. The fallback keeps
+    # isolated test/portable config fixtures compatible without making it a
+    # supported project credential source.
+    cfg['feishu_app_id'] = os.environ.get('FS_APP_ID', '').strip() or str(cfg.get('feishu_app_id') or '').strip()
+    cfg['feishu_app_secret'] = os.environ.get('FS_APP_SECRET', '').strip()
+    if not cfg['feishu_app_id']:
+        raise RuntimeError(
+            '缺少 FS_APP_ID：请先由 D:\\projects\\lykj-projects-map\\scripts\\project-credential-env.ps1 注入全局飞书凭证'
+        )
+    if not cfg['feishu_app_secret']:
+        raise RuntimeError(
+            '缺少 FS_APP_SECRET：请先由 D:\\projects\\lykj-projects-map\\scripts\\project-credential-env.ps1 注入全局飞书凭证'
+        )
+
+    # Resolve Purple Bird/ZClaw identities only in memory from the central
+    # control plane.  config.json may contain project selectors and URLs, but
+    # must not carry a second CLI path, store ID, profile, cookie or auth ref.
+    if bool((cfg.get('feedback') or {}).get('enabled')):
         try:
-            for line in envf.read_text(encoding='utf-8').splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith('#'):
-                    continue
-                if stripped.startswith('FS_APP_SECRET='):
-                    file_secret = stripped.split('=', 1)[1].strip()
-                    break
-        except OSError:
-            pass
-    elif envf.is_dir():
-        # 兼容该项目既有的本地凭证目录；不扫描目录，也不接受多个候选文件。
-        legacy = envf / '飞书凭证.txt'
-        if legacy.is_file():
-            try:
-                lines = [line.strip() for line in legacy.read_text(encoding='utf-8').splitlines()
-                         if line.strip()]
-            except OSError as exc:
-                raise RuntimeError(f'无法读取本地飞书凭证文件: {exc}') from exc
-            if len(lines) != 2:
-                raise RuntimeError('本地飞书凭证文件必须恰好包含 App ID 和 Secret 两个非空行')
-            if lines[0] != str(cfg.get('feishu_app_id') or ''):
-                raise RuntimeError('本地飞书凭证 App ID 与 config.json 不一致，禁止混用')
-            file_secret = lines[1]
-    cfg['feishu_app_secret'] = os.environ.get('FS_APP_SECRET', '').strip() or file_secret
+            from ziniao_runtime import resolve_feedback_stores
+            cfg['feedback'] = resolve_feedback_stores(
+                cfg['feedback'], project_root=PROJECT_ROOT)
+        except Exception as exc:
+            raise RuntimeError(f'全局紫鸟运行时接入失败，Feedback 已阻断: {exc}') from exc
 
     validate(cfg)
     return cfg
@@ -366,6 +374,14 @@ def validate(cfg: dict) -> None:
     if str(feedback.get('browser_visibility') or '').strip().lower() != 'background':
         raise RuntimeError(
             'feedback.browser_visibility 必须固定为 background，禁止Feedback任务弹出紫鸟窗口')
+    if feedback.get('zclaw_preflight_enabled') is not True:
+        raise RuntimeError('feedback.zclaw_preflight_enabled 必须为 true，禁止跳过全局 doctor')
+    try:
+        preflight_timeout = float(feedback.get('zclaw_preflight_timeout_seconds'))
+    except (TypeError, ValueError):
+        raise RuntimeError('feedback.zclaw_preflight_timeout_seconds 必须是数字')
+    if not 1 <= preflight_timeout <= 300:
+        raise RuntimeError('feedback.zclaw_preflight_timeout_seconds 必须在1到300秒之间')
     try:
         auth_retry_attempts = int(feedback.get('auth_retry_attempts'))
     except (TypeError, ValueError):
@@ -398,7 +414,7 @@ def validate(cfg: dict) -> None:
             store_keys.append(str(item.get('key') or '').strip())
             display_names.append(str(item.get('display_name') or '').strip())
             for key in ('key', 'display_name', 'store_id', 'expected_store_identity',
-                        'feedback_manager_url', 'secret_ref'):
+                        'feedback_manager_url'):
                 if not str(item.get(key) or '').strip():
                     raise RuntimeError(f'启用Feedback时 feedback.stores.{key} 不能为空')
             if not isinstance(item.get('selectors'), dict):

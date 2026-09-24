@@ -56,7 +56,6 @@
   "weekly_registry_sheet_id": "c1fcd1",
   "weekly_registry_max_age_days": 8.0,
   "feishu_allowed_hosts": ["wit0jhu6kvu.feishu.cn"],
-  "feishu_app_id": "cli_aa097133e3355ccd",
   "feishu_output_layout": {
     "default_start_col": 8,
     "sheet_start_cols": {}
@@ -80,18 +79,19 @@
     "page_wait_max": 12.0,
     "detail_wait_min": 8.0,
     "detail_wait_max": 12.0,
-    "max_pages": 50,
-    "browser_visibility": "background",
+  "max_pages": 50,
+  "browser_visibility": "background",
+  "zclaw_preflight_enabled": true,
+  "zclaw_preflight_timeout_seconds": 60,
+  "home_url": "https://sellercentral.amazon.com/home",
     "auth_retry_attempts": 1,
     "auth_retry_wait_min": 5.0,
     "auth_retry_wait_max": 10.0,
     "stores": [
       {
         "key": "store_a",
-        "store_id": "",
-        "expected_store_identity": "",
+        "home_url": "https://sellercentral.amazon.com/home",
         "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
-        "secret_ref": "SELLER_CENTRAL_STORE_A",
         "selectors": {
           "latest_feedback_marker": ".fbm-content.katal h3",
           "store_identity_mode": "cli_store_context",
@@ -114,10 +114,8 @@
       },
       {
         "key": "store_b",
-        "store_id": "",
-        "expected_store_identity": "",
+        "home_url": "https://sellercentral.amazon.com/home",
         "feedback_manager_url": "https://sellercentral.amazon.com/feedback-manager/index.html",
-        "secret_ref": "SELLER_CENTRAL_STORE_B",
         "selectors": {
           "latest_feedback_marker": ".fbm-content.katal h3",
           "store_identity_mode": "cli_store_context",

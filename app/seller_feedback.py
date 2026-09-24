@@ -656,27 +656,47 @@ def _status_for_exception(exc: Exception) -> str:
     return 'blocked'
 
 
-def _is_retryable_auth_failure(exc: Exception) -> bool:
-    """Return True only for a likely Seller Central login redirect.
+def _is_retryable_feedback_failure(exc: Exception) -> bool:
+    """Return True for one bounded session/navigation recovery attempt.
 
-    A login page can be a transient store-session expiry and is safe to retry
-    after the collector's ``finally`` block closes that store context.  CAPTCHA,
-    robot/risk, permission, keychain and API-key errors are not transient page
-    redirects and must remain fail-closed without an automated retry.
+    Seller Central login redirects and browser-level reachability failures can
+    be transient after a Purple Bird store context is opened.  The collector's
+    ``finally`` block closes that context before this function is retried, so a
+    fresh headless context is established.  CAPTCHA, robot/risk, permission,
+    keychain/API-key and page-identity failures remain fail-closed.
     """
     text = str(exc).lower()
     non_retryable = (
         'captcha', 'robot check', 'verify you are human', '验证码', 'suspicious',
         '风控', 'permission', 'keychain', 'apikey', 'api key', 'credential',
-        'access denied',
+        'access denied', 'identity mismatch', '身份不一致', '页面结构',
     )
     if any(marker in text for marker in non_retryable):
         return False
     return any(marker in text for marker in (
         '/ap/signin', 'seller central login', '亚马逊 登录', 'login page',
         'login required', 'sign in required', 'authentication required',
-        '重新登录',
+        '重新登录', 'feedback首页不可达', 'can not be reached',
+        'cannot be reached', "this site can't be reached", 'this site can’t be reached',
+        'err_socks_connection_failed', 'err_proxy_connection_failed',
+        'err_connection_reset', 'err_connection_refused',
+        'err_connection_timed_out', 'err_timed_out', 'err_name_not_resolved',
+        'err_address_unreachable', 'err_internet_disconnected',
+        # ZClaw may fail before page content is returned when a freshly opened
+        # headless store still points at a stale/unready Chrome debug port.
+        # Treat this as the same bounded session-recovery class as a transient
+        # page reachability error.  The outer collector closes the store before
+        # retrying, so this cannot reuse the broken tab or hammer the endpoint.
+        'econnrefused', 'debug port', 'not ready: connect',
+        'zclaw 工具调用失败', 'zclaw tool call failed', 'bridge not ready',
+        '无法访问此网站', '无法连接', '连接失败', 'bridge',
+        '首页导航未完成', '首页不可达',
     ))
+
+
+def _is_retryable_auth_failure(exc: Exception) -> bool:
+    """Backward-compatible alias for the bounded session recovery predicate."""
+    return _is_retryable_feedback_failure(exc)
 
 
 def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
@@ -709,7 +729,7 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
     all_rows = []
     ordered_stores = [store for store in store_order if store in collectors]
     ordered_stores.extend(store for store in collectors if store not in ordered_stores)
-    for store in ordered_stores:
+    for store_index, store in enumerate(ordered_stores):
         store_started = time.monotonic()
         store_report = {
             'store': store, 'status': 'ok', 'source_url': '', 'pages': [],
@@ -718,9 +738,18 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
             'browser_headless': True,
             'browser_context_policy': 'store_context',
             'store_open_succeeded': False,
+            'browser_context_closed': False,
+            'browser_release_policy': 'close_immediately_after_store',
+            'browser_close_error': '',
+            'zclaw_preflight_status': 'not_run',
+            'zclaw_preflight_elapsed_seconds': 0.0,
+            'zclaw_preflight_error': '',
             'auth_retry_configured': retry_limit,
             'auth_retry_count': 0,
             'auth_retry_delays_seconds': [],
+            'transient_retry_configured': retry_limit,
+            'transient_retry_count': 0,
+            'transient_retry_delays_seconds': [],
         }
         collector = collectors.get(store)
         try:
@@ -745,6 +774,12 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                                 'boundary_reached', 'boundary_page', 'risk_stopped',
                                 'browser_visibility', 'browser_headless',
                                 'browser_context_policy', 'store_open_succeeded',
+                                'browser_context_closed', 'browser_release_policy',
+                                'browser_close_error',
+                                'zclaw_preflight_status',
+                                'zclaw_preflight_elapsed_seconds',
+                                'zclaw_preflight_error',
+                                'home_url', 'home_navigation_count', 'navigation_policy',
                             )
                             if key in response
                         })
@@ -756,13 +791,16 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
                     all_rows.extend(rows)
                     break
                 except Exception as exc:
-                    if (_is_retryable_auth_failure(exc)
+                    if (_is_retryable_feedback_failure(exc)
                             and store_report['auth_retry_count'] < retry_limit):
                         delay = round(random.uniform(retry_min, retry_max), 3)
                         store_report['auth_retry_count'] += 1
                         store_report['auth_retry_delays_seconds'].append(delay)
-                        store_report['auth_retry_last_reason'] = redact_secrets(
-                            f'{type(exc).__name__}: {exc}')
+                        store_report['transient_retry_count'] += 1
+                        store_report['transient_retry_delays_seconds'].append(delay)
+                        retry_reason = redact_secrets(f'{type(exc).__name__}: {exc}')
+                        store_report['auth_retry_last_reason'] = retry_reason
+                        store_report['transient_retry_last_reason'] = retry_reason
                         retry_sleep_fn(delay)
                         continue
                     raise
@@ -770,12 +808,34 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
             store_report.update(
                 status=_status_for_exception(exc),
                 error=redact_secrets(f'{type(exc).__name__}: {exc}'))
+            # Keep the home-first navigation evidence even when the store is
+            # stopped before a collector response can be returned (for
+            # example North Rong landing on Seller Central login).
+            if hasattr(collector, 'home_url'):
+                store_report['home_url'] = str(getattr(collector, 'home_url') or '')
+                store_report['navigation_policy'] = 'home_first'
+            if hasattr(collector, 'home_navigation_count'):
+                store_report['home_navigation_count'] = int(
+                    getattr(collector, 'home_navigation_count') or 0)
+            if hasattr(collector, 'store_close_succeeded'):
+                store_report['browser_context_closed'] = bool(
+                    getattr(collector, 'store_close_succeeded'))
+                store_report['browser_release_policy'] = 'close_immediately_after_store'
+            if hasattr(collector, 'store_close_error'):
+                store_report['browser_close_error'] = str(
+                    getattr(collector, 'store_close_error') or '')
             # Preserve whether the headless store context was opened before a
             # later navigation/page safety failure.  This is useful for
             # proving the no-popup policy without persisting CLI/session data.
             if hasattr(collector, 'store_open_succeeded'):
                 store_report['store_open_succeeded'] = bool(
                     getattr(collector, 'store_open_succeeded'))
+            for key in (
+                    'zclaw_preflight_status',
+                    'zclaw_preflight_elapsed_seconds',
+                    'zclaw_preflight_error'):
+                if hasattr(collector, key):
+                    store_report[key] = getattr(collector, key)
             if isinstance(exc, FeedbackSafetyStop):
                 # The store collector's finally block closes the current
                 # context; the next store is a fresh, independent context as
@@ -785,6 +845,41 @@ def collect_feedback(run_id: str, collectors: dict[str, Callable[[], object]],
         store_report['finished_at'] = local_now().isoformat(timespec='seconds')
         store_report['elapsed_seconds'] = round(time.monotonic() - store_started, 3)
         stores[store] = store_report
+        # A store context that could not be closed is still owned/unknown.
+        # Never open another store or continue business reads in that state;
+        # the outer shared lock will be released only after this run exits.
+        close_failed = bool(store_report.get('browser_close_error')) or (
+            bool(store_report.get('store_open_succeeded'))
+            and store_report.get('browser_context_closed') is not True)
+        if close_failed:
+            for pending in ordered_stores[store_index + 1:]:
+                stores[pending] = {
+                    'store': pending,
+                    'status': 'blocked',
+                    'source_url': '',
+                    'pages': [],
+                    'rows': [],
+                    'error': '前一店铺关闭回读失败，未继续打开后续店铺',
+                    'browser_visibility': 'background',
+                    'browser_headless': True,
+                    'browser_context_policy': 'store_context',
+                    'store_open_succeeded': False,
+                    'browser_context_closed': False,
+                    'browser_release_policy': 'close_immediately_after_store',
+                    'browser_close_error': 'previous_store_close_failed',
+                    'zclaw_preflight_status': 'not_run',
+                    'zclaw_preflight_elapsed_seconds': 0.0,
+                    'zclaw_preflight_error': 'previous_store_close_failed',
+                    'auth_retry_configured': retry_limit,
+                    'auth_retry_count': 0,
+                    'auth_retry_delays_seconds': [],
+                    'transient_retry_configured': retry_limit,
+                    'transient_retry_count': 0,
+                    'transient_retry_delays_seconds': [],
+                    'finished_at': local_now().isoformat(timespec='seconds'),
+                    'elapsed_seconds': 0.0,
+                }
+            break
 
     failed = [item for item in stores.values() if item['status'] != 'ok']
     status = 'ok' if not failed else ('partial' if len(failed) < len(stores) else failed[0]['status'])

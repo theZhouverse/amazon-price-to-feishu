@@ -105,14 +105,14 @@ Windows、Python 3.10+、Chromium/DrissionPage。Python依赖以 `config/require
 - 子表、单元格、图片等内容继承其所属云端资源的文件级权限；添加 Sheet 或写入内容不另建第二套人员权限名单。未来新增资源创建/上传入口必须复用 `ensure_generated_resource_access()`，否则不得接入正式交付。
 - 该规则不自动扫描或批量修改任意历史资源；但凡资源被登记为当前应用的交付目标，初始化或写入前必须显式补授权并逐项回读。历史资源的补授权仍需给出明确资源范围和审计证据，不能由新资源规则推断已完成。
 
-新增的前端检查沿用商品详情页的同一浏览器会话和页面证据，不为每一项检查重复打开商品页。新增的后台Feedback采集使用两个店铺各自的Seller Central会话/凭证，和零售商品页会话分开；凭证只从运行时Secret注入，不写入快照、日志、bundle或Git。两个店铺必须串行处理，一个店铺的浏览器上下文、页面状态、分页游标和订单详情不能带入另一个店铺。单店铺失败只将Feedback子任务标记为partial/blocked，并在安全关闭当前店铺上下文后继续另一店铺；不回写价格行，也不把后台失败计入价格技术异常率。实现参考BDLD项目的慢速串行、随机等待和风险立即停机原则，但不复制其店铺身份、凭证或业务字段。
+新增的前端检查沿用商品详情页的同一浏览器会话和页面证据，不为每一项检查重复打开商品页。新增的后台Feedback采集使用两个店铺各自的Seller Central会话/凭证，和零售商品页会话分开；凭证只从运行时Secret注入，不写入快照、日志、bundle或Git。两个店铺必须串行处理，一个店铺的浏览器上下文、页面状态、分页游标和订单详情不能带入另一个店铺。普通单店业务失败在安全关闭当前店铺上下文后可继续另一店铺；若关闭或关闭回读失败，则立即阻断后续店铺，不能继续打开未知上下文。不回写价格行，也不把后台失败计入价格技术异常率。实现参考BDLD项目的慢速串行、随机等待和风险立即停机原则，但不复制其店铺身份、凭证或业务字段。
 
 ## 3. 配置与来源
 
 - 非敏感配置：`app/config.py` 默认值 → `config/config.json`；模板为 `config/config.example.json`。
-- 敏感配置：根目录 `.env`，兼容本机 `.env/飞书凭证.txt`；同名系统环境变量优先。
-- `.env.example` 仅列出 `FS_APP_SECRET`，不是第二套业务配置。JSON不得包含真实Secret或 `feishu_app_secret` 配置项。
-- 兼容凭证文件为两个非空行，App ID必须与JSON一致；不要同时维护多份本地Secret。
+- 敏感配置由全局 `D:\projects\lykj-projects-map\scripts\project-credential-env.ps1` 注入：应用1（AMZ前台数据提取）、应用2（AMZ后台数据提取，T2/T8/T9/T11共用）和应用3（周报表格处理，T6独立）的实际飞书 ID/Key 统一填写在 `D:\projects\.config\feishu-credentials.json`；紫鸟的 CLI、Company ID、店铺账号字段统一填写在 `D:\projects\.config\ziniao-credentials.json`。`runtime\credentials\feishu.credentials.env` 不再作为飞书凭证源。紫鸟浏览器仍必须通过全局 `ziniao-cli`/ZClaw Bridge，并执行 doctor、串行店铺生命周期；领星单独登记，不得并入紫鸟文件。项目根 `.env` 只保留项目专属参数。
+- `.env.example` 仅列出项目运行时变量模板，不是共享凭证副本。JSON不得包含真实Secret或 `feishu_app_secret` 配置项。
+- 三个飞书应用的实际值只在目标主机 `D:\projects\.config\feishu-credentials.json` 中手工填写；紫鸟 CLI、Company ID、店铺账号和密码字段只在 `D:\projects\.config\ziniao-credentials.json` 登记。实际浏览器操作仍必须通过全局 `ziniao-cli`/Windows Keychain 和 ZClaw Bridge，所有启动器必须同进程加载全局运行规则，缺失或来源重复时阻断。
 - 正式任务的子表列表及Marketplace来自本批最新快照发现结果；旧静态sheets/sheet_profiles不是全量范围上限。
 - 周报子表发现与字段解析遵守“动态子表 + 业务表头契约”：每批读取快照元数据中的全部子表并保留原顺序，不使用旧静态 `sheets` 列表限制数量。标题以 `PD`/`XD`/`PDF` 开头的业务表路由到 US，以 `CPD` 开头的业务表路由到 CA；描述性新标题只有在完整业务表头下能从标题明确识别国家（`US/USA/美国`或`CA/Canada/加拿大`），或从 ASIN 单元格中的 Amazon URL 得到全表单一站点时才自动推断 Marketplace，纯 ASIN 无线索、混合域名/国家或无法识别的站点必须阻断并列入发现报告，禁止猜测。
 - 源表读取字段按规范化业务表头定位，不按绝对列号定位。必须至少存在 `ASIN`、`SKU`、`尺寸`（或`商品尺寸`）、`正常售价`（或`正常价格`）、`本周折扣形式`（或`本周折扣类型`）、`本周折扣%`（含全角百分号）和`目标成交价`（或`目标价格`）；`ASIN\n(说明)`属于合法表头。部分周报（如 PD03/PD05）会在后段辅助区重复 `ASIN`、`SKU` 或`尺寸`，解析器固定选取从左到右的第一处业务字段，重复位置只进入 `source_schema.duplicate` 审计，不覆盖主字段。中间插入、移动或追加辅助列不影响映射；缺失字段或只剩历史位置兜底时，在首次抓取前以“源表字段结构不兼容”失败关闭，不读取错列。
@@ -121,7 +121,8 @@ Windows、Python 3.10+、Chromium/DrissionPage。Python依赖以 `config/require
 - 周报副本的结构门禁分为两层：复制完整性只比较按源表相对顺序排列的业务子表标题及实际行/列容量（`structure_shape_sha256`），不比较业务表的绝对 Sheet index；辅助子表不参与该稳定形状比较，因此可以新增、删除或调整顺序。A1:P10 样例及其内容 `sha256` 仅作审计指纹，不因公式重算、时间戳或辅助说明变化而阻断。副本随后必须通过全部子表的业务表头/Marketplace 发现和字段门禁；因此增加或移动中间辅助列、新增辅助表不会错位，而缺失业务子表、业务表容量不一致、未知站点或必需字段缺失仍必须 fail-close。初始化中断恢复时复用已创建副本，记录最新源表指纹及内容漂移，不重复复制、不把实时原表作为业务输入。
 - 前端检查中只有尺寸一致性需要使用当批周报的尺寸预期；尺寸比较必须把`8'X10'`与`8 x 10 ft`、`2.5'X8'`与`2'6\" x 8'`视为同一尺寸，并允许页面附带`(Rectangular)`等非尺寸描述；父ASIN发散按页面子体关系判断，其余图片、品牌故事、BSR、环保和Amazon's Choice指标均只读取当前页面存在性，不与周报字段匹配；BSR与AC各自独立判定，不能因为同一页面同时存在两种合法证据而互相覆盖。
 - 历史`htmls/`和诊断HTML只用于前端检查的离线样本、选择器和证据定位匹配；不得把历史HTML当作当前运行页面，也不得用历史HTML直接生成本批N:T结果。
-- Feedback任务需要两个店铺的非敏感标识、各自Seller Central反馈管理器URL、凭证引用、固定目标子表身份和页面节奏配置；反馈管理器URL必须明确指向后台【反馈管理器】页面，不得改用商品Review、Q&A或前台评论页面。凭证引用只保存在本机Secret配置，店铺标识、脱敏来源URL和目标Sheet ID写入manifest用于审计。
+- Feedback任务需要两个店铺的全局非敏感身份、各自Seller Central反馈管理器URL、固定目标子表身份和页面节奏配置；反馈管理器URL必须明确指向后台【反馈管理器】页面，不得改用商品Review、Q&A或前台评论页面。认证只由全局运行时/宿主机受控注入，项目不保存凭证引用；脱敏店铺标识、来源URL和目标Sheet ID写入manifest用于审计。
+- 紫鸟/ZClaw身份由全局控制平面统一提供：`D:\projects\lykj-projects-map\config\ziniao-runtime.json`、`automation-registry.json` 和 `scripts\ziniao-prod.ps1` 是 CLI、主机、Bridge、店铺 ID/显示名和执行顺序的唯一运行来源；`D:\projects\.config\ziniao-credentials.json` 是本机凭证字段登记。当前项目 `config/config.json` 只保存页面选择器、Feedback URL和节奏策略；不保存第二套 CLI 路径、店铺 ID、Profile、Cookie 或凭证。加载启用的 Feedback 配置时，代码只在内存中把全局身份与项目选择器合并。
 - Feedback窗口与留存配置固定为：首次成功运行回看最近7个自然日；后续成功运行回看当前运行时间往前3个自然日；结果表按反馈日期仅保留最近10个自然日。窗口日期统一使用`Asia/Shanghai`，首次窗口只有在两个店铺都完成到达窗口边界或明确记录了安全终止原因后才推进为后续3日窗口；部分失败不得把未完成的首次7日窗口伪装成增量窗口。
 - Feedback不再挂在价格调度链路中。服务器四个价格计划任务均以`--price-only`运行，早间不自动打开紫鸟或写Feedback；当前部署先暂停明天早上的Feedback自动步骤。人工需要采集时使用`app\main.py --feedback-only --confirm`，测试可追加`--dry-run`，该入口必须取得统一运行锁、按`home-first`读取两个店铺并在完成后写回固定Feedback子表。手工运行必须显式标记为`manual`，不得伪装成定时槽位，也不得与价格任务并发写同一子表。
 - `outputs/weekly_runs/fixed_result.json` 是固定云端资源身份登记，不是重复的配置来源；部署迁移必须保留。
@@ -150,7 +151,8 @@ amazon_daily_structured_20260821/
 │   ├── weekly_result.py            最新ASIN窗口读取、基础行发布、列迁移与写后核对
 │   ├── frontend_checks.py          商品详情页图片、尺寸、BSR及标志检查
 │   ├── seller_feedback.py          两店铺Seller Central低星feedback窗口、去重、合并与固定子表发布
-│   ├── seller_feedback_browser.py  官方ziniao-cli页面适配、慢速分页和详情风控门禁
+│   ├── seller_feedback_browser.py  全局CLI wrapper页面适配、慢速分页和详情风控门禁
+│   ├── ziniao_runtime.py            全局紫鸟runtime/registry、doctor入口、公共锁和上下文状态
 │   ├── result_notification.py      通知模板、收件人过滤与发送
 │   ├── cache.py / exporters.py     快照缓存、CSV
 │   ├── runtime_state.py            统一进程锁、独立临时文件与持久化原子JSON
@@ -248,7 +250,7 @@ ReportRow记录源行、ASIN、基础字段、目标价来源和前端检查预�
 
 每次发布前按反馈日期删除结果表中早于`运行时间 - 10个自然日`的记录，先备份目标子表、再写入合并后的两店结果、最后按9列整表回读。日期缺失或无法解释的记录不能静默归入10日窗口，保存到本地异常证据并标记阻断。源端当前页暂时没有返回的历史反馈不自动删除，只有本地10日留存门禁或明确的业务保留期限才允许清理。
 
-Feedback任务独立记录`ok`、`partial`、`blocked`和`auth_error`。每次`page visit`后必须通过`page content`回读页面URL/标题/错误页信息，确认没有落入`chrome-error://`或`This site can't be reached`等浏览器网络错误页，再读取【最新反馈】DOM；紫鸟CLI返回“导航成功”不能替代页面可达性回读。一个店铺遇到登录页或临时首页网络/Bridge不可达时先停止当前上下文并关闭它，最多按`auth_retry_attempts`（默认1次）重新以`store open --headless`建立该店铺上下文，等待`auth_retry_wait_min`～`auth_retry_wait_max`（默认5～10秒）后重新导航；每次重试都必须记录次数、随机等待和原因。重试后仍为登录页才将该店铺标记`auth_error`，仍为网络不可达则标记`blocked`，再按独立会话继续另一店铺。验证码、风控、权限、页面结构异常、翻页无变化或二级订单身份不一致不是可重试登录跳转，必须立即停止该店铺并保存页码/URL/原因证据，不连续重试轰炸。两个店铺均成功但窗口内没有评级小于等于3的记录时，写入零条新增结果并记录“无符合条件数据”，不能把空结果当作接口失败。目标表不可见的内部状态、幂等键、页码、来源URL、失败原因、`run_id`和规则版本全部保存在`outputs/feedback/{run_id}/`，不扩展用户要求的9列表头。Feedback可见固定表头顺序必须为`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`；订单商品编号/ASIN/SKU紧跟订单编号，评论列位于详情字段之后。任何迁移先备份整表，再按A:I写入并整表回读，表头不匹配时禁止猜测覆盖。
+Feedback任务独立记录`ok`、`partial`、`blocked`和`auth_error`。每次`page visit`后必须通过`page content`回读页面URL/标题/错误页信息，确认没有落入`chrome-error://`或`This site can't be reached`等浏览器网络错误页，再读取【最新反馈】DOM；紫鸟CLI返回“导航成功”不能替代页面可达性回读。一个店铺遇到登录页或临时首页网络/Bridge不可达时先停止当前上下文并关闭它，最多按`auth_retry_attempts`（默认1次）重新以`store open --headless`建立该店铺上下文，等待`auth_retry_wait_min`～`auth_retry_wait_max`（默认5～10秒）后重新导航；每次重试都必须记录次数、随机等待和原因。`ZClaw 工具调用失败`、`Debug port ... is not ready`、`connect ECONNREFUSED`、Bridge端口未就绪与页面“Can’t be reached”同属一次有界的临时会话/网络恢复范围：必须先关闭当前店铺，再重新无头打开并从Seller Central首页开始，不能在原Tab上继续，也不能连续刷新或切换代理。重试后仍为登录页才将该店铺标记`auth_error`，仍为网络不可达或Bridge端口不可用则标记`blocked`，再按独立会话继续另一店铺。验证码、风控、权限、页面结构异常、翻页无变化或二级订单身份不一致不是可重试登录跳转，必须立即停止该店铺并保存页码/URL/原因证据，不连续重试轰炸。两个店铺均成功但窗口内没有评级小于等于3的记录时，写入零条新增结果并记录“无符合条件数据”，不能把空结果当作接口失败。目标表不可见的内部状态、幂等键、页码、来源URL、失败原因、`run_id`和规则版本全部保存在`outputs/feedback/{run_id}/`，不扩展用户要求的9列表头。Feedback可见固定表头顺序必须为`店铺、日期、评级、订单编号、订单商品编号、ASIN、SKU、评论、获取时间戳`；订单商品编号/ASIN/SKU紧跟订单编号，评论列位于详情字段之后。任何迁移先备份整表，再按A:I写入并整表回读，表头不匹配时禁止猜测覆盖。
 
 ## 6. 价格与折扣规则
 
@@ -346,9 +348,10 @@ latest_run.json记录最新准备批次（period、run、快照和固定结果To
 
 浏览器启动兼容与诊断：`browser_auto_port=true`时为每次浏览器会话在受控本地端口范围内分配独立CDP端口，禁止复用残留的固定9222会话；当前Chrome 136+/152与DrissionPage 4.1.1.4组合必须带`--remote-allow-origins=*`，本机已验证需要`--disable-gpu`和`--no-sandbox`才能稳定建立CDP连接，三项均可由配置关闭后在迁移设备重新验收。不得固定过期User-Agent，使用本机Chromium原生版本。浏览器启动日志必须记录`stage`、Marketplace、headless、auto_port、no_sandbox、disable_gpu、是否显式代理、脱敏启动参数、CDP address、browser version和耗时；setup日志记录目标首页导航返回值、观察到的URL/host、位置模式/验证方法和失败原因；商品导航日志记录`tab.get`/`doc_loaded`返回False时的观察URL、ASIN绑定结果和Chrome错误页。Feedback紫鸟启动日志还必须记录`browser_visibility=background`、`store_open --headless`和当前店铺会话是否复用；日志不得保存Secret、Cookie、Authorization或完整代理凭证。
 
-### 9.1 跨项目紫鸟上下文与 MFA 门禁（2026-09-22）
+### 9.1 跨项目紫鸟上下文与 MFA 门禁（2026-09-23）
 
-- Amazon Daily 与 T2、T8、T9、T11 共用本机紫鸟成员账号/Bridge，但不能共用浏览器标签、Profile、代理出口或 Seller Central 会话。每次运行必须取得公共锁 `D:\projects\.runtime\ziniao_sellercentral.lock`，再取得 `outputs/weekly_scheduler.lock`；公共锁尚未接入全部项目前，生产状态保持 `PARTIAL/CONTROLLED`。
+- Amazon Daily 与 T2、T8、T9、T11 共用本机紫鸟成员账号/Bridge，但不能共用浏览器标签、Profile、代理出口或 Seller Central 会话。每次涉及店铺浏览器的运行必须取得全局公共锁 `D:\projects.runtime\ziniao\_sellercentral.lock`，并在 `D:\projects.runtime\ziniao\_context\_status.json` 写入脱敏的项目/主机/PID/店铺生命周期状态，再取得 `outputs/weekly_scheduler.lock`；释放顺序固定为业务页退出→店铺关闭→关闭回读→项目锁→全局锁。锁被占用时不打开第二个项目或店铺，不使用旧页面/旧结果补齐。
+- 每次按 `store_id` 打开店铺前，必须通过全局控制平面的 `D:\projects\lykj-projects-map\scripts\ziniao-prod.ps1 doctor` 执行一次只读 `doctor`；项目不得从 PATH、项目配置或旧脚本自行选择 CLI。全局 `ziniao-runtime.json` 是 CLI/主机/Bridge/店铺身份的唯一来源，API Key/Keychain 原文不得写入日志。预检失败、预检缺失或全局 runtime 未登记时禁止执行 `store open`，记录 `zclaw_preflight_status=failed`、耗时和脱敏原因；不得把“没有执行预检”或“Bridge 未验证”记为成功。预检只允许当前店铺打开前的一次调用，不以循环调用代替店铺上下文的首页门禁。
 - 启动前除了 `doctor` 外，还必须按 `store_id` 执行 `store open --headless → Seller Central /home → URL/标题/后台壳/账号身份回读`。只有 `HOME_OK` 才能进入 Amazon 商品或 Feedback 页面；`AMAZON_LOGIN_REQUIRED`、`AMAZON_MFA_REQUIRED`、`AMAZON_CAPTCHA`、`AMAZON_RATE_LIMIT`、`ZINIAO_PROXY_UNREACHABLE`、`IDENTITY_MISMATCH` 任一状态都要关闭当前上下文并阻断，不读取旧 DOM、旧 HTML 或旧价格。
 - MFA 只能由授权人工在当前店铺完成；自动化不得读取/填写 OTP、复制 Cookie、切换未登记代理或通过刷新/循环重试规避验证。人工恢复后必须重新从 `/home` 做身份门禁，不能从上次失败的业务页继续。
 - manifest/log 只记录 `project/run_id/store_id/target_url/egress_status/home_status/risk_status/close_status` 等脱敏元数据。统一规程见[紫鸟跨项目上下文与MFA风控规程](../../.knowledge/knowledge/api/紫鸟跨项目上下文与MFA风控规程_20260922.md)。
@@ -419,7 +422,7 @@ ASIN提取支持纯编号、普通URL、飞书富文本链接及HYPERLINK公式�
 
 生产环境只支持 Windows 宿主机本地运行，不交付、不维护 Dockerfile、Compose、容器入口或容器迁移方案。程序直接使用宿主机 `.venv`、本机 Chromium/DrissionPage、已授权的紫鸟/ZClaw 会话和本机文件系统；固定结果表、源登记表、Feedback 和通知均由同一宿主机进程完成。不得同时启用第二套调度器，也不得以 Docker 或容器替换 Windows 计划任务。
 
-宿主机部署必须先创建项目 `.venv` 并安装锁定依赖，复制不含 Secret 的 `config/config.json` 模板；真实 `FS_APP_SECRET` 只通过项目根目录未提交的 `.env` 或受控系统环境变量注入。运行数据持久化在项目根目录的 `outputs/`、`data/`、`tmp/` 及按需启用的 `htmls/`，这些目录不能被当作普通缓存整体删除。HTML 归档/服务仍独立于价格流程，当前配置关闭时不得因其缺失阻断价格任务。
+宿主机部署必须先创建项目 `.venv` 并安装锁定依赖，复制不含 Secret 的 `config/config.json` 模板；真实 `FS_APP_SECRET` 只通过全局 `project-credential-env.ps1` 从 `D:\projects\.config\feishu-credentials.json` 注入，项目根 `.env` 不得再保存共享 Secret。运行数据持久化在项目根目录的 `outputs/`、`data/`、`tmp/` 及按需启用的 `htmls/`，这些目录不能被当作普通缓存整体删除。HTML 归档/服务仍独立于价格流程，当前配置关闭时不得因其缺失阻断价格任务。
 
 Amazon 出口必须显式来自 `config.proxy` 或 `AMAZON_PROXY`，或来自已经在本机浏览器中验证的紫鸟/VPN出口；程序不自动继承通用 `HTTP_PROXY/HTTPS_PROXY`。允许的宿主机运行时覆盖包括 `AMAZON_HTML_ARCHIVE_ROOT`、`AMAZON_HTML_ARCHIVE_ENABLED`、`AMAZON_HTML_ARCHIVE_REQUIRED`、`AMAZON_HTML_SERVER_ENABLED`、`AMAZON_HTML_SERVER_BIND`、`AMAZON_HTML_SERVER_PORT`、`AMAZON_WORKERS`、`AMAZON_PROXY` 和 `AMAZON_FEEDBACK_ENABLED`；未知环境变量不得改变配置。`AMAZON_FEEDBACK_ENABLED` 仅是本机运行开关，启用前必须确认两店紫鸟会话、固定 Feedback Sheet 和选择器均已登记并通过只读验收。
 

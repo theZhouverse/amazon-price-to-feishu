@@ -241,14 +241,72 @@ class SellerFeedbackTest(unittest.TestCase):
         self.assertEqual(calls['count'], 2)
         self.assertEqual(calls['delays'], [1.0])
         self.assertEqual(report['stores']['store_a']['auth_retry_count'], 1)
+        self.assertEqual(report['stores']['store_a']['transient_retry_count'], 1)
+
+    def test_feedback_home_unreachable_is_retried_once_then_can_recover(self):
+        calls = {'count': 0, 'delays': []}
+
+        def collector(**_):
+            calls['count'] += 1
+            if calls['count'] == 1:
+                raise RuntimeError(
+                    "Feedback首页不可达，浏览器返回网络错误页: "
+                    "chrome-error://chromewebdata/ ERR_SOCKS_CONNECTION_FAILED"
+                )
+            return {'source_url': 'https://sellercentral.example/feedback', 'pages': []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            report = collect_feedback(
+                'network-retry-run', {'store_a': collector}, Path(temp),
+                window=feedback_window(NOW), store_order=('store_a',),
+                auth_retry_attempts=1, auth_retry_wait_min=1,
+                auth_retry_wait_max=1,
+                retry_sleep_fn=lambda delay: calls['delays'].append(delay),
+            )
+        self.assertEqual(report['status'], 'ok')
+        self.assertEqual(calls['count'], 2)
+        self.assertEqual(calls['delays'], [1.0])
+        self.assertEqual(report['stores']['store_a']['transient_retry_count'], 1)
+
+    def test_stale_zclaw_debug_port_is_retried_once_then_can_recover(self):
+        calls = {'count': 0, 'delays': []}
+
+        def collector(**_):
+            calls['count'] += 1
+            if calls['count'] == 1:
+                raise RuntimeError(
+                    'ZClaw 工具调用失败 [-1]: Debug port 55566 is not ready: '
+                    'connect ECONNREFUSED 127.0.0.1:55566')
+            return {'source_url': 'https://sellercentral.example/feedback', 'pages': []}
+
+        with tempfile.TemporaryDirectory() as temp:
+            report = collect_feedback(
+                'zclaw-port-retry-run', {'store_a': collector}, Path(temp),
+                window=feedback_window(NOW), store_order=('store_a',),
+                auth_retry_attempts=1, auth_retry_wait_min=1,
+                auth_retry_wait_max=1,
+                retry_sleep_fn=lambda delay: calls['delays'].append(delay),
+            )
+        self.assertEqual(report['status'], 'ok')
+        self.assertEqual(calls['count'], 2)
+        self.assertEqual(calls['delays'], [1.0])
+        self.assertEqual(report['stores']['store_a']['transient_retry_count'], 1)
 
     def test_non_transient_auth_and_risk_errors_are_not_retried(self):
         self.assertTrue(_is_retryable_auth_failure(
             RuntimeError('page redirected to /ap/signin')))
+        self.assertTrue(_is_retryable_auth_failure(
+            RuntimeError('ERR_SOCKS_CONNECTION_FAILED on Feedback首页')))
+        self.assertTrue(_is_retryable_auth_failure(
+            RuntimeError(
+                'ZClaw 工具调用失败 [-1]: Debug port 55566 is not ready: '
+                'connect ECONNREFUSED 127.0.0.1:55566')))
         self.assertFalse(_is_retryable_auth_failure(
             RuntimeError('keychain apiKey item not found')))
         self.assertFalse(_is_retryable_auth_failure(
             RuntimeError('captcha challenge on Seller Central')))
+        self.assertFalse(_is_retryable_auth_failure(
+            RuntimeError('反馈页面店铺身份不一致')))
 
     def test_state_advances_only_after_two_store_readback(self):
         report = {

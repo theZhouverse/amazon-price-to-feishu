@@ -2,10 +2,12 @@
 from pathlib import Path
 import unittest
 
-from seller_feedback_browser import (FeedbackDataError, FeedbackStoreCollector,
-                                      SafetyStop, ZiniaoCliRunner, _detail_script,
+from seller_feedback_browser import (FeedbackDataError, FeedbackPageUnreachable,
+                                      FeedbackStoreCollector, SafetyStop, ZiniaoCliRunner,
+                                      _detail_script,
                                       _guard_page_output, _read_script,
-                                      _click_next_script, validate_feedback_manager_url)
+                                      _click_next_script, validate_feedback_manager_url,
+                                      validate_seller_central_home_url)
 
 
 def selectors():
@@ -34,19 +36,33 @@ class FakeRunner:
         self.calls = []
         self.page = 0
         self.in_detail = False
+        self.current_url = 'https://sellercentral.amazon.com/home'
+        self.fail_close = False
 
     def store_open(self, store_id):
         self.calls.append(('open', store_id))
 
     def store_close(self, store_id):
         self.calls.append(('close', store_id))
+        if self.fail_close:
+            raise RuntimeError('close bridge unavailable')
 
     def page_visit(self, store_id, url):
         self.calls.append(('visit', store_id, url))
         self.page = 0
+        self.current_url = url
 
     def page_wait_nav(self, store_id, timeout_ms=30000):
         self.calls.append(('wait-nav', store_id))
+
+    def page_content(self, store_id, content_format='text', timeout_ms=30000):
+        self.calls.append(('content', store_id, content_format))
+        is_home = '/home' in self.current_url or self.current_url.rstrip('/').endswith('amazon.com')
+        return {
+            'content': 'Seller Central home' if is_home else 'Feedback Manager',
+            'title': '亚马逊',
+            'url': self.current_url,
+        }
 
     def page_exec(self, store_id, script, timeout_ms=30000):
         self.calls.append(('exec', script.split('*/', 1)[0]))
@@ -116,6 +132,9 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertEqual(runner.calls[0], ('open', 'store-id-a'))
         self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
         self.assertTrue(result['store_open_succeeded'])
+        self.assertTrue(result['browser_context_closed'])
+        self.assertEqual(result['browser_release_policy'], 'close_immediately_after_store')
+        self.assertEqual(result['browser_close_error'], '')
         self.assertEqual(result['browser_visibility'], 'background')
         self.assertTrue(result['browser_headless'])
 
@@ -142,6 +161,97 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
     def test_feedback_manager_url_requires_feedback_path(self):
         with self.assertRaises(FeedbackDataError):
             validate_feedback_manager_url('https://sellercentral.amazon.com/orders')
+
+    def test_home_url_requires_home_or_root_path(self):
+        self.assertEqual(
+            validate_seller_central_home_url('https://sellercentral.amazon.com/home'),
+            'https://sellercentral.amazon.com/home',
+        )
+        with self.assertRaises(FeedbackDataError):
+            validate_seller_central_home_url(
+                'https://sellercentral.amazon.com/feedback-manager/index.html')
+
+    def test_store_always_navigates_home_before_feedback(self):
+        runner = FakeRunner()
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        result = collector(window={'start': '2026-09-09', 'end': '2026-09-09'})
+        visits = [call for call in runner.calls if call[0] == 'visit']
+        self.assertGreaterEqual(len(visits), 2)
+        self.assertTrue(visits[0][2].endswith('/home'))
+        self.assertIn('/feedback-manager', visits[1][2])
+        self.assertEqual(result['navigation_policy'], 'home_first')
+        self.assertGreaterEqual(result['home_navigation_count'], 1)
+
+    def test_store_close_failure_is_not_reported_as_released(self):
+        runner = FakeRunner()
+        runner.fail_close = True
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaisesRegex(RuntimeError, 'close bridge unavailable'):
+            collector(window={'start': '2026-09-09', 'end': '2026-09-09'})
+        self.assertFalse(collector.store_close_succeeded)
+        self.assertIn('close bridge unavailable', collector.store_close_error)
+
+    def test_store_open_failure_best_effort_closes_partial_context(self):
+        runner = FakeRunner()
+        original_open = runner.store_open
+
+        def failing_open(store_id):
+            runner.calls.append(('open-partial', store_id))
+            raise RuntimeError(
+                'ZClaw 工具调用失败：Debug port 55566 is not ready: '
+                'connect ECONNREFUSED 127.0.0.1:55566')
+
+        runner.store_open = failing_open
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaisesRegex(RuntimeError, 'Debug port'):
+            collector(window={'start': '2026-09-09', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+        self.assertFalse(collector.store_open_succeeded)
+        self.assertTrue(collector.store_close_succeeded)
+
+    def test_home_navigation_rejects_stale_feedback_route(self):
+        runner = FakeRunner()
+        original = runner.page_content
+
+        def stale_page(store_id, content_format='text', timeout_ms=30000):
+            value = original(store_id, content_format, timeout_ms)
+            if runner.current_url.endswith('/home'):
+                value['url'] = 'https://sellercentral.amazon.com/feedback-manager/index.html'
+            return value
+
+        runner.page_content = stale_page
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaisesRegex(SafetyStop, '首页导航未完成'):
+            collector(window={'start': '2026-09-09', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
+
+    def test_unreachable_chrome_error_page_is_explicit(self):
+        runner = FakeRunner()
+        runner.page_content = lambda store_id, content_format='text', timeout_ms=30000: {
+            'content': "This site can't be reached ERR_SOCKS_CONNECTION_FAILED",
+            'title': 'sellercentral.amazon.com',
+            'url': 'chrome-error://chromewebdata/',
+        }
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaises(FeedbackPageUnreachable) as context:
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertIn('ERR_SOCKS_CONNECTION_FAILED', str(context.exception))
+        self.assertEqual(runner.calls[-1], ('close', 'store-id-a'))
 
     def test_unchanged_page_after_next_is_safety_stop(self):
         runner = FakeRunner()
@@ -340,6 +450,66 @@ class SellerFeedbackBrowserTest(unittest.TestCase):
         self.assertEqual(captured['args'][-1], '--headless')
         self.assertIn('store', captured['args'])
         self.assertIn('open', captured['args'])
+
+    def test_zclaw_doctor_checks_bridge_without_parsing_api_key_output(self):
+        captured = {}
+
+        def run_fn(args, **kwargs):
+            captured['args'] = args
+            return type('Completed', (), {
+                'returncode': 0,
+                'stdout': '检查 ZClaw Bridge...\n  ✓ ZClaw Bridge 连通正常\n'
+                          '✓ 全部检查通过\n  ✓ API Key: use****72',
+                'stderr': '',
+            })()
+
+        runner = ZiniaoCliRunner(cli_path=Path(__file__), run_fn=run_fn)
+        result = runner.zclaw_doctor()
+        self.assertEqual(result['bridge'], 'healthy')
+        self.assertNotIn('use****72', result)
+        self.assertEqual(captured['args'][-1], 'doctor')
+
+    def test_zclaw_doctor_blocks_bridge_failure(self):
+        def run_fn(args, **kwargs):
+            return type('Completed', (), {
+                'returncode': 0,
+                'stdout': '检查 ZClaw Bridge...\n  ✗ ZClaw Bridge 未就绪',
+                'stderr': '',
+            })()
+
+        runner = ZiniaoCliRunner(cli_path=Path(__file__), run_fn=run_fn)
+        with self.assertRaisesRegex(RuntimeError, 'ZClaw预检失败'):
+            runner.zclaw_doctor()
+
+    def test_collector_runs_zclaw_preflight_before_store_open(self):
+        class DoctorRunner(FakeRunner):
+            def zclaw_doctor(self, timeout=60):
+                self.calls.append(('doctor', timeout))
+
+        runner = DoctorRunner()
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        result = collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertEqual(runner.calls[0][0], 'doctor')
+        self.assertEqual(runner.calls[1], ('open', 'store-id-a'))
+        self.assertEqual(result['zclaw_preflight_status'], 'ok')
+
+    def test_failed_zclaw_preflight_does_not_open_store(self):
+        class FailingDoctorRunner(FakeRunner):
+            def zclaw_doctor(self, timeout=60):
+                raise RuntimeError('ZClaw Bridge 未就绪')
+
+        runner = FailingDoctorRunner()
+        collector = FeedbackStoreCollector(
+            self.store(), runner, page_wait_min=1, page_wait_max=1,
+            detail_wait_min=1, detail_wait_max=1, sleep_fn=lambda _: None,
+        )
+        with self.assertRaisesRegex(RuntimeError, 'ZClaw Bridge 未就绪'):
+            collector(window={'start': '2026-09-03', 'end': '2026-09-09'})
+        self.assertFalse(any(call[0] == 'open' for call in runner.calls))
+        self.assertEqual(collector.zclaw_preflight_status, 'failed')
 
     def test_guard_ignores_cli_notice_but_blocks_risk_in_page_result(self):
         _guard_page_output({

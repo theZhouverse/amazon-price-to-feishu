@@ -1300,34 +1300,42 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
     try:
         from seller_feedback import local_now, run_feedback_pipeline
         from seller_feedback_browser import build_feedback_collectors
+        from ziniao_runtime import global_sellercentral_lock
         feedback_execution_started_at = local_now(execution_started_at)
-        collectors = build_feedback_collectors(feedback_cfg)
         should_write = not args.dry_run and not args.fetch_only
-        raw = run_feedback_pipeline(
-            fc=fc,
-            run_id=run_id,
-            collectors=collectors,
-            evidence_dir=evidence_root,
-            state_path=state_path,
-            spreadsheet_token=str(feedback_cfg.get('target_spreadsheet_token') or ''),
-            sheet_id=str(feedback_cfg.get('target_sheet_id') or ''),
-            initial_days=int(feedback_cfg.get('initial_window_days', 7)),
-            incremental_days=int(feedback_cfg.get('incremental_window_days', 3)),
-            retention_days=int(feedback_cfg.get('retention_days', 10)),
-            max_rating=int(feedback_cfg.get('max_rating', 3)),
-            store_order=feedback_cfg.get('store_order') or ('store_a', 'store_b'),
-            store_display_names={
-                str(item.get('key')): str(item.get('display_name')).strip()
-                for item in (feedback_cfg.get('stores') or [])
-                if isinstance(item, dict) and str(item.get('key') or '').strip()
-                and str(item.get('display_name') or '').strip()
-            },
-            now=feedback_execution_started_at,
-            auth_retry_attempts=int(feedback_cfg.get('auth_retry_attempts', 1)),
-            auth_retry_wait_min=float(feedback_cfg.get('auth_retry_wait_min', 5.0)),
-            auth_retry_wait_max=float(feedback_cfg.get('auth_retry_wait_max', 10.0)),
-            write=should_write,
-        )
+        # The shared lock spans the complete serial store lifecycle.  It is
+        # acquired before the first doctor/store-open and released only after
+        # the final store close/readback, so another project cannot enter a
+        # Purple Bird context concurrently.
+        store_ids = [str(item.get('store_id') or '') for item in (feedback_cfg.get('stores') or [])]
+        with global_sellercentral_lock(
+                phase='feedback', store_ids=store_ids, project_root=PROJECT_ROOT):
+            collectors = build_feedback_collectors(feedback_cfg)
+            raw = run_feedback_pipeline(
+                fc=fc,
+                run_id=run_id,
+                collectors=collectors,
+                evidence_dir=evidence_root,
+                state_path=state_path,
+                spreadsheet_token=str(feedback_cfg.get('target_spreadsheet_token') or ''),
+                sheet_id=str(feedback_cfg.get('target_sheet_id') or ''),
+                initial_days=int(feedback_cfg.get('initial_window_days', 7)),
+                incremental_days=int(feedback_cfg.get('incremental_window_days', 3)),
+                retention_days=int(feedback_cfg.get('retention_days', 10)),
+                max_rating=int(feedback_cfg.get('max_rating', 3)),
+                store_order=feedback_cfg.get('store_order') or ('store_a', 'store_b'),
+                store_display_names={
+                    str(item.get('key')): str(item.get('display_name')).strip()
+                    for item in (feedback_cfg.get('stores') or [])
+                    if isinstance(item, dict) and str(item.get('key') or '').strip()
+                    and str(item.get('display_name') or '').strip()
+                },
+                now=feedback_execution_started_at,
+                auth_retry_attempts=int(feedback_cfg.get('auth_retry_attempts', 1)),
+                auth_retry_wait_min=float(feedback_cfg.get('auth_retry_wait_min', 5.0)),
+                auth_retry_wait_max=float(feedback_cfg.get('auth_retry_wait_max', 10.0)),
+                write=should_write,
+            )
         sheet = raw.get('sheet') or {}
         result = _feedback_report_base(raw.get('status') or 'blocked')
         result.update({
@@ -1353,6 +1361,10 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
             'feedback_execution_started_at': feedback_execution_started_at.isoformat(timespec='seconds'),
             'feedback_browser_visibility': str(
                 feedback_cfg.get('browser_visibility') or 'background').strip().lower(),
+            'ziniao_runtime_project_id': feedback_cfg.get('ziniao_runtime_project_id', 'amazon_daily'),
+            'ziniao_runtime_host_id': feedback_cfg.get('ziniao_runtime_host_id', ''),
+            'ziniao_global_lock_path': r'D:\projects.runtime\ziniao\_sellercentral.lock',
+            'ziniao_context_status_path': r'D:\projects.runtime\ziniao\_context\_status.json',
         })
         p(logger, '[Feedback] status=' + str(result['feedback_status'])
           + ' stores=' + json.dumps(result['feedback_store_status'], ensure_ascii=False)
@@ -1378,6 +1390,8 @@ def _run_feedback_stage(fc, cfg: dict, run_id: str, args, logger, out: Path,
                 if isinstance(feedback_execution_started_at, datetime) else ''),
             'feedback_browser_visibility': str(
                 feedback_cfg.get('browser_visibility') or 'background').strip().lower(),
+            'ziniao_global_lock_path': r'D:\projects.runtime\ziniao\_sellercentral.lock',
+            'ziniao_context_status_path': r'D:\projects.runtime\ziniao\_context\_status.json',
         })
         p(logger, '[Feedback] 已停止：' + json.dumps({
             'status': result['feedback_status'],

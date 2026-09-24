@@ -23,45 +23,106 @@ from urllib.parse import urlparse
 
 from seller_feedback import (FeedbackDataError, FeedbackSafetyStop, parse_feedback_date,
                               redact_secrets)
+from ziniao_runtime import resolve_cli_wrapper
 
 
 class SafetyStop(FeedbackSafetyStop):
     """The page/session no longer satisfies the safe automation contract."""
 
 
+class FeedbackPageUnreachable(RuntimeError):
+    """The browser reached a Chrome/network error page instead of Seller Central."""
+
+
 class FeedbackRunner(Protocol):
+    def zclaw_doctor(self) -> object: ...
     def store_open(self, store_id: str) -> object: ...
     def store_close(self, store_id: str) -> object: ...
     def page_visit(self, store_id: str, url: str) -> object: ...
     def page_wait_nav(self, store_id: str, timeout_ms: int = 30000) -> object: ...
+    def page_content(self, store_id: str, content_format: str = 'text',
+                    timeout_ms: int = 30000) -> object: ...
     def page_exec(self, store_id: str, script: str, timeout_ms: int = 30000) -> object: ...
 
 
-_CLI_CANDIDATES = (
-    Path(r'C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2\ziniao-cli.cmd'),
-    Path(r'C:\Users\Administrator\AppData\Roaming\npm\ziniao-cli.cmd'),
-)
 _DANGER_MARKERS = (
     'captcha', 'validatecaptcha', 'robot check', 'verify you are human',
     'signin', 'sign in', 'login required', 'access denied', 'suspicious',
     '被登出', '验证码', '风控',
 )
+_PAGE_UNREACHABLE_MARKERS = (
+    "this site can't be reached", 'this site can’t be reached',
+    'can not be reached', 'cannot be reached', 'webpage not available',
+    '网页无法打开', '无法访问此网站', '无法连接', '连接失败',
+    'err_socks_connection_failed', 'err_proxy_connection_failed',
+    'err_connection_reset', 'err_connection_refused', 'err_connection_timed_out',
+    'err_timed_out', 'err_name_not_resolved', 'err_address_unreachable',
+    'err_internet_disconnected', 'chrome-error://',
+)
+
+_SELLER_CENTRAL_HOST_PATTERN = r'^sellercentral(?:-[a-z0-9-]+)?\.amazon\.[a-z]{2,}(?:\.[a-z]{2,})?$'
+_DEFAULT_HOME_URL = 'https://sellercentral.amazon.com/home'
+
+
+def _doctor_bridge_lines(output: str) -> list[str]:
+    """Return only the Bridge-related lines from the human doctor output."""
+    return [
+        line.strip() for line in str(output or '').splitlines()
+        if re.search(r'zclaw|bridge', line, flags=re.IGNORECASE)
+    ]
+
+
+def _doctor_bridge_is_healthy(output: str) -> bool:
+    """Recognise a healthy ZClaw Bridge without treating API skips as failures."""
+    lines = _doctor_bridge_lines(output)
+    if not lines:
+        return False
+    text = ' '.join(lines).lower()
+    failure_markers = (
+        '✗', '失败', 'failed', 'failure', 'error', 'unreachable',
+        'not ready', '未就绪', '不可用', '断开',
+    )
+    if any(marker in text for marker in failure_markers):
+        return False
+    return any(marker in text for marker in (
+        '连通正常', 'connected', 'healthy', 'ok', '✓',
+    ))
+
+
+def _validate_seller_central_url(value: object, *, purpose: str) -> str:
+    """Validate an HTTPS Seller Central URL before opening a store page."""
+    url = str(value or '').strip()
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme.lower() != 'https' or not re.fullmatch(
+            _SELLER_CENTRAL_HOST_PATTERN, host):
+        raise FeedbackDataError(
+            f'{purpose}必须是HTTPS Seller Central域名，拒绝: '
+            + redact_secrets(url[:300])
+        )
+    return url
 
 
 def validate_feedback_manager_url(value: object) -> str:
     """Accept only an HTTPS Seller Central URL that names the feedback area."""
-    url = str(value or '').strip()
+    url = _validate_seller_central_url(value, purpose='Feedback管理器URL')
     parsed = urlparse(url)
-    host = (parsed.hostname or '').lower()
-    host_pattern = r'^sellercentral(?:-[a-z0-9-]+)?\.amazon\.[a-z]{2,}(?:\.[a-z]{2,})?$'
     target = (parsed.path or '') + ('?' + parsed.query if parsed.query else '')
-    if parsed.scheme.lower() != 'https' or not re.fullmatch(host_pattern, host):
-        raise FeedbackDataError(
-            f'Feedback管理器URL必须是HTTPS Seller Central域名，拒绝: {redact_secrets(url[:300])}'
-        )
     if 'feedback' not in target.lower():
         raise FeedbackDataError(
             'Feedback管理器URL路径未包含feedback，拒绝访问非反馈页面'
+        )
+    return url
+
+
+def validate_seller_central_home_url(value: object) -> str:
+    """Accept only Seller Central home/root URLs used for the home-first gate."""
+    url = _validate_seller_central_url(value, purpose='Seller Central首页URL')
+    path = (urlparse(url).path or '/').rstrip('/') or '/'
+    if path not in {'/', '/home'}:
+        raise FeedbackDataError(
+            'Seller Central首页URL必须是根路径或 /home，拒绝跳过首页的地址：'
+            + redact_secrets(url[:300])
         )
     return url
 
@@ -167,18 +228,32 @@ class ZiniaoCliRunner:
 
     def __init__(self, cli_path: Path | None = None, *, cwd: Path | None = None,
                  run_fn: Callable = subprocess.run):
-        self.cli_path = Path(cli_path) if cli_path else next(
-            (item for item in _CLI_CANDIDATES if item.is_file()), None)
+        # Production never resolves a CLI from PATH or a project-local list.
+        # The central PowerShell wrapper reads the approved host/CLI mapping
+        # from D:\projects\lykj-projects-map.  ``cli_path`` remains an explicit
+        # test/maintenance injection point and is never persisted in config.
+        self._central_wrapper = cli_path is None
+        self.cli_path = (resolve_cli_wrapper(Path(__file__).resolve().parent.parent)
+                         if cli_path is None else Path(cli_path))
         self.cwd = Path(cwd) if cwd else Path.cwd()
         self.run_fn = run_fn
 
-    def call(self, args: list[str], timeout: int = 120) -> object:
+    def _run_process(self, args: list[str], timeout: int) -> object:
         if self.cli_path is None or not self.cli_path.is_file():
             raise RuntimeError('找不到已登记的紫鸟 CLI；未执行任何店铺操作')
-        completed = self.run_fn(
-            [str(self.cli_path), *args], cwd=str(self.cwd), capture_output=True,
+        command = [str(self.cli_path)]
+        if self._central_wrapper and self.cli_path.suffix.lower() in {'.ps1', '.psm1'}:
+            command = [
+                'powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive',
+                '-ExecutionPolicy', 'Bypass', '-File', str(self.cli_path),
+            ]
+        return self.run_fn(
+            [*command, *args], cwd=str(self.cwd), capture_output=True,
             text=True, encoding='utf-8', errors='replace', timeout=timeout,
         )
+
+    def call(self, args: list[str], timeout: int = 120) -> object:
+        completed = self._run_process(args, timeout)
         stderr = completed.stderr or ''
         _guard_page_output(stderr)
         if completed.returncode != 0:
@@ -193,6 +268,34 @@ class ZiniaoCliRunner:
         value = parse_cli_json(completed.stdout)
         _guard_page_output(value)
         return _cli_value(value)
+
+    def zclaw_doctor(self, timeout: int = 60) -> object:
+        """Check the local ZClaw Bridge before creating a store context.
+
+        ``doctor`` intentionally returns human-readable text rather than the
+        JSON envelope used by page/store commands, so it has a dedicated
+        parser.  The API-key line is never returned to the caller or stored in
+        evidence; only a small health result is exposed.
+        """
+        started = time.monotonic()
+        completed = self._run_process(['doctor'], timeout=timeout)
+        raw = '\n'.join(
+            part for part in (completed.stdout or '', completed.stderr or '') if part
+        )
+        safe = redact_secrets(raw)
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f'ZClaw预检失败（ziniao-cli exit={completed.returncode}）：{safe[-1200:]}'
+            )
+        if not _doctor_bridge_is_healthy(raw):
+            bridge_lines = _doctor_bridge_lines(raw)
+            detail = ' | '.join(bridge_lines) or safe[-800:]
+            raise RuntimeError('ZClaw预检失败（Bridge未通过）：' + redact_secrets(detail))
+        return {
+            'ok': True,
+            'bridge': 'healthy',
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+        }
 
     def store_open(self, store_id: str) -> object:
         # Do not expose a visible-window escape hatch through this production
@@ -215,6 +318,14 @@ class ZiniaoCliRunner:
     def page_wait_nav(self, store_id: str, timeout_ms: int = 30000) -> object:
         return self.call([
             'page', 'wait-nav', '--store-id', store_id,
+            '--timeout', str(timeout_ms),
+        ], timeout=max(60, int(timeout_ms / 1000) + 30))
+
+    def page_content(self, store_id: str, content_format: str = 'text',
+                     timeout_ms: int = 30000) -> object:
+        return self.call([
+            'page', 'content', '--store-id', store_id,
+            '--content-format', str(content_format or 'text'),
             '--timeout', str(timeout_ms),
         ], timeout=max(60, int(timeout_ms / 1000) + 30))
 
@@ -510,6 +621,9 @@ class FeedbackStoreCollector:
                  page_wait_max: float = 12.0, detail_wait_min: float = 8.0,
                  detail_wait_max: float = 12.0, max_pages: int = 50,
                  max_detail_attempts: int = 0,
+                 zclaw_preflight_enabled: bool = True,
+                 zclaw_preflight_timeout_seconds: float = 60.0,
+                 require_zclaw_doctor: bool = False,
                  sleep_fn: Callable = time.sleep):
         self.store = dict(store)
         self.runner = runner
@@ -520,12 +634,28 @@ class FeedbackStoreCollector:
         self.max_pages = max_pages
         self.max_detail_attempts = int(max_detail_attempts)
         self.store_open_succeeded = False
+        self.store_close_succeeded = False
+        self.store_close_error = ''
+        self.zclaw_preflight_enabled = bool(zclaw_preflight_enabled)
+        self.zclaw_preflight_timeout_seconds = float(zclaw_preflight_timeout_seconds)
+        self.require_zclaw_doctor = bool(require_zclaw_doctor)
+        self.zclaw_preflight_status = 'not_run'
+        self.zclaw_preflight_elapsed_seconds = 0.0
+        self.zclaw_preflight_error = ''
+        if self.zclaw_preflight_timeout_seconds <= 0:
+            raise FeedbackDataError(
+                f'店铺 {self.key}: zclaw_preflight_timeout_seconds 必须大于0'
+            )
         if self.max_detail_attempts < 0:
             raise FeedbackDataError(
                 f'店铺 {self.key}: max_detail_attempts 不能为负数'
             )
         self.sleep_fn = sleep_fn
         self.selectors = _required_selector_config(self.store)
+        self.home_url = validate_seller_central_home_url(
+            self.store.get('home_url') or _DEFAULT_HOME_URL
+        )
+        self.home_navigation_count = 0
         self.page_date_order = str(
             self.store.get('page_date_order')
             or self.selectors.get('page_date_order')
@@ -582,6 +712,145 @@ class FeedbackStoreCollector:
             raise SafetyStop('订单详情回读的订单编号与点击目标不一致，停止读取')
         return value
 
+    def _zclaw_preflight(self) -> None:
+        """Verify the local Bridge immediately before ``store open``."""
+        self.zclaw_preflight_status = 'skipped_disabled'
+        self.zclaw_preflight_elapsed_seconds = 0.0
+        self.zclaw_preflight_error = ''
+        if not self.zclaw_preflight_enabled:
+            return
+        check = getattr(self.runner, 'zclaw_doctor', None)
+        if not callable(check):
+            self.zclaw_preflight_status = 'unavailable'
+            if self.require_zclaw_doctor:
+                raise RuntimeError(
+                    'ZClaw doctor 未提供，生产流程禁止在未预检时执行 store open')
+            return
+        started = time.monotonic()
+        try:
+            check(timeout=max(1, int(self.zclaw_preflight_timeout_seconds)))
+        except TypeError:
+            # Keep compatibility with a small test/maintenance adapter whose
+            # doctor method has no timeout parameter.
+            try:
+                check()
+            except Exception as exc:
+                self.zclaw_preflight_status = 'failed'
+                self.zclaw_preflight_error = redact_secrets(
+                    f'{type(exc).__name__}: {exc}')
+                self.zclaw_preflight_elapsed_seconds = round(
+                    time.monotonic() - started, 3)
+                raise
+        except Exception as exc:
+            self.zclaw_preflight_status = 'failed'
+            self.zclaw_preflight_error = redact_secrets(
+                f'{type(exc).__name__}: {exc}')
+            self.zclaw_preflight_elapsed_seconds = round(
+                time.monotonic() - started, 3)
+            raise
+        self.zclaw_preflight_status = 'ok'
+        self.zclaw_preflight_elapsed_seconds = round(
+            time.monotonic() - started, 3)
+
+    def _page_content_probe(self, store_id: str) -> dict | None:
+        """Read and validate the browser page envelope after navigation.
+
+        ``page visit`` may return a CLI success marker even when Chrome has
+        rendered ``chrome-error://chromewebdata/``.  The old flow then waited
+        for the Feedback marker and reported a vague page-structure failure.
+        A small text probe after each navigation makes the real network error
+        explicit and lets the outer bounded session retry handle transient
+        SOCKS/Bridge failures.  Login/risk pages are still handled by the
+        existing safety guard and are never downgraded to a network retry.
+        """
+        probe_fn = getattr(self.runner, 'page_content', None)
+        if not callable(probe_fn):
+            # Test doubles and legacy adapters may not expose the optional
+            # probe.  The DOM identity gate remains the safety boundary, but
+            # production runners always provide this method.
+            return None
+        value = probe_fn(store_id, 'text', 30000)
+        _guard_page_output(value)
+        if not isinstance(value, dict):
+            raise SafetyStop('Seller Central页面回读不是结构化结果，停止读取')
+        metadata = []
+        for key in ('url', 'title', 'error', 'message'):
+            item = value.get(key)
+            if item not in (None, ''):
+                metadata.append(str(item))
+        metadata_text = ' '.join(metadata)
+        lowered_metadata = metadata_text.lower()
+        content = str(value.get('content') or value.get('text') or '')
+        lowered_content = content[:1500].lower()
+        if (any(marker in lowered_metadata for marker in _PAGE_UNREACHABLE_MARKERS)
+                or (any(marker in lowered_content for marker in _PAGE_UNREACHABLE_MARKERS)
+                    and ('chrome-error://' in lowered_metadata
+                         or not metadata_text))):
+            observed_url = str(value.get('url') or '').strip()
+            observed_title = str(value.get('title') or '').strip()
+            detail = ' '.join(part for part in (observed_url, observed_title, content[:240]) if part)
+            raise FeedbackPageUnreachable(
+                'Feedback首页不可达（Seller Central页面不可达），浏览器返回网络错误页：'
+                + redact_secrets(detail)
+            )
+        return value
+
+    def _assert_home_page_reachable(self, store_id: str) -> None:
+        """Require a verified Seller Central home/root page before Feedback."""
+        value = self._page_content_probe(store_id)
+        if value is None:
+            return
+        observed_url = str(value.get('url') or '').strip()
+        if not observed_url:
+            raise SafetyStop('首页导航回读缺少当前URL，拒绝跳过首页读取')
+        try:
+            observed = _validate_seller_central_url(
+                observed_url, purpose='Seller Central首页回读URL')
+        except FeedbackDataError as exc:
+            raise SafetyStop(str(exc)) from exc
+        path = (urlparse(observed).path or '/').rstrip('/') or '/'
+        if path not in {'/', '/home'}:
+            raise SafetyStop(
+                '首页导航未完成，当前页面不是Seller Central首页：'
+                f'expected={self.home_url!r}, actual={observed!r}'
+            )
+
+    def _assert_feedback_page_reachable(self, store_id: str) -> None:
+        """Require a verified Feedback route after the home-first step."""
+        value = self._page_content_probe(store_id)
+        if value is None:
+            return
+        observed_url = str(value.get('url') or '').strip()
+        if not observed_url:
+            raise SafetyStop('Feedback导航回读缺少当前URL，拒绝读取残留页面')
+        try:
+            observed = validate_feedback_manager_url(observed_url)
+        except FeedbackDataError as exc:
+            raise SafetyStop(
+                'Feedback导航未完成，当前页面不是Feedback管理器：'
+                + redact_secrets(observed_url[:300])
+            ) from exc
+        if 'feedback' not in (urlparse(observed).path or '').lower():
+            raise SafetyStop(
+                'Feedback导航未完成，当前页面路由未包含feedback：'
+                + redact_secrets(observed[:300])
+            )
+
+    def _navigate_home_page(self, store_id: str) -> None:
+        """Navigate to and verify the Seller Central home page first."""
+        self.runner.page_visit(store_id, self.home_url)
+        self.runner.page_wait_nav(store_id, 30000)
+        _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+        self._assert_home_page_reachable(store_id)
+        self.home_navigation_count += 1
+
+    def _navigate_feedback_page(self, store_id: str, url: str) -> None:
+        """Navigate, wait, and verify that the Feedback route is current."""
+        self.runner.page_visit(store_id, url)
+        self.runner.page_wait_nav(store_id, 30000)
+        _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+        self._assert_feedback_page_reachable(store_id)
+
     def _read_ready_page(self, store_id: str) -> dict:
         """Bounded retry only for SPA content that has not rendered yet."""
         for attempt in range(3):
@@ -605,11 +874,10 @@ class FeedbackStoreCollector:
         raise SafetyStop('订单详情页在有界等待后仍未就绪')
 
     def _return_to_feedback(self, store_id: str, page_number: int = 1) -> dict:
-        """Reopen Feedback Manager and restore the page containing the row."""
+        """Return via Seller Central home, then restore the Feedback page."""
         url = validate_feedback_manager_url(self.store.get('feedback_manager_url'))
-        self.runner.page_visit(store_id, url)
-        self.runner.page_wait_nav(store_id, 30000)
-        _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+        self._navigate_home_page(store_id)
+        self._navigate_feedback_page(store_id, url)
         payload = self._read_ready_page(store_id)
         for _ in range(1, max(1, int(page_number))):
             next_info = payload.get('next') or {}
@@ -627,6 +895,7 @@ class FeedbackStoreCollector:
                 )
             self.runner.page_wait_nav(store_id, 30000)
             _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+            self._assert_feedback_page_reachable(store_id)
             payload = self._read_ready_page(store_id)
         return payload
 
@@ -679,13 +948,29 @@ class FeedbackStoreCollector:
         boundary_reached = False
         boundary_page = None
         self.store_open_succeeded = False
-        self.runner.store_open(store_id)
-        self.store_open_succeeded = True
+        self.store_close_succeeded = False
+        self.store_close_error = ''
+        self.home_navigation_count = 0
+        self._zclaw_preflight()
+        # ``store open`` may return after creating a partial/stale context and
+        # then fail before the Bridge debug port is usable.  Best-effort close
+        # that context before propagating the error so the outer bounded retry
+        # never starts from an unknown browser state.
+        try:
+            self.runner.store_open(store_id)
+            self.store_open_succeeded = True
+        except Exception:
+            try:
+                self.runner.store_close(store_id)
+                self.store_close_succeeded = True
+            except Exception as close_exc:
+                self.store_close_error = redact_secrets(
+                    f'{type(close_exc).__name__}: {close_exc}')
+            raise
         try:
             _sleep_random(5.0, 7.0, self.sleep_fn)
-            self.runner.page_visit(store_id, url)
-            self.runner.page_wait_nav(store_id, 30000)
-            _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+            self._navigate_home_page(store_id)
+            self._navigate_feedback_page(store_id, url)
             previous_signature = None
             previous_last_date = None
             for page_number in range(1, self.max_pages + 1):
@@ -813,14 +1098,24 @@ class FeedbackStoreCollector:
                 next_clicks += 1
                 self.runner.page_wait_nav(store_id, 30000)
                 _sleep_random(self.page_wait_min, self.page_wait_max, self.sleep_fn)
+                self._assert_feedback_page_reachable(store_id)
             else:
                 raise SafetyStop(f'反馈分页超过安全上限 {self.max_pages} 页，停止读取')
         finally:
             # Closing failure is intentionally visible to collect_feedback; the
             # caller must not continue to the second store with an uncertain context.
-            self.runner.store_close(store_id)
+            try:
+                self.runner.store_close(store_id)
+                self.store_close_succeeded = True
+            except Exception as exc:
+                self.store_close_error = redact_secrets(
+                    f'{type(exc).__name__}: {exc}')
+                raise
         return {
             'source_url': url,
+            'home_url': self.home_url,
+            'home_navigation_count': self.home_navigation_count,
+            'navigation_policy': 'home_first',
             'pages': pages,
             'detail_attempted': detail_attempted,
             'detail_complete': detail_complete,
@@ -834,6 +1129,12 @@ class FeedbackStoreCollector:
             'browser_headless': True,
             'browser_context_policy': 'store_context',
             'store_open_succeeded': self.store_open_succeeded,
+            'browser_context_closed': self.store_close_succeeded,
+            'browser_release_policy': 'close_immediately_after_store',
+            'browser_close_error': self.store_close_error,
+            'zclaw_preflight_status': self.zclaw_preflight_status,
+            'zclaw_preflight_elapsed_seconds': self.zclaw_preflight_elapsed_seconds,
+            'zclaw_preflight_error': self.zclaw_preflight_error,
             'elapsed_seconds': round(time.monotonic() - started, 3),
         }
 
@@ -854,11 +1155,16 @@ def build_feedback_collectors(feedback_cfg: dict, *, runner: FeedbackRunner | No
     if visibility != 'background':
         raise FeedbackDataError(
             'Feedback紫鸟浏览器必须使用 background 策略，禁止打开可见窗口或抢占前台')
+    if not bool(feedback_cfg.get('zclaw_preflight_enabled', True)):
+        raise FeedbackDataError(
+            'Feedback生产流程必须在每次 store open 前执行 ZClaw doctor 预检，不能关闭')
     runner = runner or ZiniaoCliRunner()
     result = {}
     for store in stores:
         if not isinstance(store, dict):
             raise FeedbackDataError('feedback.stores 每项必须是对象')
+        store = dict(store)
+        store.setdefault('home_url', feedback_cfg.get('home_url') or _DEFAULT_HOME_URL)
         key = str(store.get('key') or '').strip()
         if not key or key in result:
             raise FeedbackDataError('Feedback店铺 key 为空或重复')
@@ -869,6 +1175,13 @@ def build_feedback_collectors(feedback_cfg: dict, *, runner: FeedbackRunner | No
             detail_wait_min=float(feedback_cfg.get('detail_wait_min', 8.0)),
             detail_wait_max=float(feedback_cfg.get('detail_wait_max', 12.0)),
             max_pages=int(feedback_cfg.get('max_pages', 50)),
+            zclaw_preflight_enabled=bool(
+                feedback_cfg.get('zclaw_preflight_enabled', True)),
+            zclaw_preflight_timeout_seconds=float(
+                feedback_cfg.get('zclaw_preflight_timeout_seconds', 60.0)),
+            # Production collectors are never allowed to proceed with a
+            # legacy/test adapter that lacks the global doctor gate.
+            require_zclaw_doctor=True,
             sleep_fn=sleep_fn,
         )
     return result

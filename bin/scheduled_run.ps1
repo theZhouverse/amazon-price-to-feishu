@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$globalCredentialLoader = 'D:\projects\lykj-projects-map\scripts\project-credential-env.ps1'
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
 $schedulerLogRoot = Join-Path $projectRoot 'outputs\scheduler_logs'
 New-Item -ItemType Directory -Force -Path $schedulerLogRoot | Out-Null
@@ -15,6 +16,19 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     exit 2
 }
 Set-Location -LiteralPath $projectRoot
+$credentialImportError = $null
+try {
+    if (-not (Test-Path -LiteralPath $globalCredentialLoader -PathType Leaf)) {
+        throw "GLOBAL_CREDENTIAL_LOADER_MISSING:$globalCredentialLoader"
+    }
+    . $globalCredentialLoader -ProjectId 'amazon_daily' -ProjectRoot $projectRoot -Import
+} catch {
+    $credentialImportError = $_.Exception.Message
+}
+if ($null -ne $credentialImportError) {
+    "[$($startedAt.ToString('o'))] BLOCKED: shared credential import failed: $credentialImportError" | Set-Content -LiteralPath $logPath -Encoding UTF8
+    exit 12
+}
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
